@@ -82,55 +82,36 @@ class AnnualReportBot:
     
     def change_liaison(self, page: Page, enterprise: dict) -> bool:
         """执行联络员变更
-        
+
         Args:
             page: 页面对象
             enterprise: 企业信息字典，包含：
                 - 注册号/统一社会信用代码
                 - 法定代表人
                 - 身份证
-                - 原联络员姓名（如果有）
-                - 原联络员证件号码（如果有）
-                - 原联络员手机号码（如果有）
         Returns:
             变更是否成功
         """
         reg_no = enterprise.get("注册号/统一社会信用代码", enterprise.get("注册号", ""))
         logger.info(f"开始联络员变更: {enterprise.get('企业名称', '')} ({reg_no})")
-        
+
         try:
             # 打开联络员变更页面
             page.goto(config.CHANGE_LIAISON_URL, wait_until="networkidle")
             time.sleep(2)
-            
+
             # ---- 填写表单 ----
             # 注意：以下选择器需要根据实际页面HTML调整
-            # 目前是根据截图中的字段顺序猜测的
-            
+
             # 统一社会信用代码/注册号
             page.fill('input[name="regno"]', reg_no)
-            
+
             # 法定代表人姓名
             page.fill('input[name="lerep"]', enterprise.get("法定代表人", ""))
-            
+
             # 法定代表人证件号码
             page.fill('input[name="lerepCerno"]', enterprise.get("身份证", ""))
-            
-            # 原联络员姓名
-            old_liaison_name = enterprise.get("原联络员姓名", "")
-            if old_liaison_name:
-                page.fill('input[name="oldLiaisonName"]', old_liaison_name)
-            
-            # 原联络员证件号码
-            old_liaison_id = enterprise.get("原联络员证件号码", "")
-            if old_liaison_id:
-                page.fill('input[name="oldLiaisonCerno"]', old_liaison_id)
-            
-            # 原联络员手机号码
-            old_liaison_phone = enterprise.get("原联络员手机号码", "")
-            if old_liaison_phone:
-                page.fill('input[name="oldLiaisonPhone"]', old_liaison_phone)
-            
+
             # ---- 新联络员信息 ----
             page.fill('input[name="newLiaisonName"]', config.NEW_LIAISON["name"])
             

@@ -212,69 +212,21 @@ class AnnualReportBot:
             change_page.fill('input[name="liaName_xin"]', new_name)
 
             # 联络员证件类型（下拉选择：中华人民共和国居民身份证）
+            # 确切选择器：id="cerIdType_xin" name="cerIdType_xin"，value="1"=居民身份证
             logger.info("选择联络员证件类型: 中华人民共和国居民身份证")
-            # 方法1：先尝试Playwright原生select_option
             try:
-                # 尝试多种可能的选择器
-                select_selectors = [
-                    'select[name="certIdType_xin"]',
-                    'select[name="certidtype_xin"]',
-                    'select#certIdType_xin',
-                    'select#certidtype_xin',
-                ]
-                selected = False
-                for sel in select_selectors:
-                    try:
-                        if change_page.locator(sel).count() > 0:
-                            # 先点击下拉框打开它
-                            change_page.click(sel)
-                            time.sleep(0.5)
-                            # 尝试用label选择
-                            change_page.select_option(sel, label="中华人民共和国居民身份证")
-                            logger.info(f"Playwright select_option 成功: {sel}")
-                            selected = True
-                            break
-                    except Exception as e:
-                        logger.warning(f"select_option失败({sel}): {e}")
-                        continue
-
-                if not selected:
-                    # 方法2：用JS找到下拉框并模拟真实点击选择
-                    logger.info("尝试JS方式选择下拉框")
-                    change_page.evaluate('''() => {
-                        const selects = document.querySelectorAll('select');
-                        for (const sel of selects) {
-                            const name = (sel.name || sel.id || '').toLowerCase();
-                            if (name.includes('certid') || name.includes('cert')) {
-                                for (let i = 0; i < sel.options.length; i++) {
-                                    if (sel.options[i].text.includes('居民身份证')) {
-                                        sel.selectedIndex = i;
-                                        sel.value = sel.options[i].value;
-                                        sel.dispatchEvent(new Event('change', {bubbles: true}));
-                                        sel.dispatchEvent(new Event('input', {bubbles: true}));
-                                        // 也触发click事件
-                                        sel.click();
-                                        break;
-                                    }
-                                }
-                                break;
-                            }
-                        }
-                    }''')
-                    logger.info("JS方式选择完成")
+                change_page.select_option('select#cerIdType_xin', value="1")
+                logger.info("下拉框选择成功: value=1 居民身份证")
             except Exception as e:
-                logger.error(f"下拉框选择异常: {e}")
-
-            # 验证下拉框选择结果
-            select_check = change_page.evaluate('''() => {
-                const selects = document.querySelectorAll('select');
-                const results = [];
-                for (const sel of selects) {
-                    results.push({name: sel.name, id: sel.id, value: sel.value, text: sel.options[sel.selectedIndex] ? sel.options[sel.selectedIndex].text : 'N/A'});
-                }
-                return results;
-            }''')
-            logger.info(f"下拉框当前状态: {select_check}")
+                logger.warning(f"select_option失败: {e}，尝试JS方式")
+                change_page.evaluate('''() => {
+                    var sel = document.getElementById("cerIdType_xin");
+                    if (sel) {
+                        sel.value = "1";
+                        sel.dispatchEvent(new Event("change", {bubbles: true}));
+                    }
+                }''')
+                logger.info("JS方式选择完成")
             time.sleep(0.5)
 
             # 新联络员证件号码
@@ -288,17 +240,11 @@ class AnnualReportBot:
             logger.info("表单数据填入完成，开始处理验证码")
 
             # ---- 图形验证码 ----
-            # 验证码图片可能是 img#vImg 或 img[name="vImg"] 或其他
-            captcha_img_sel = self._find_captcha_img(change_page)
-            if not captcha_img_sel:
-                logger.error("找不到验证码图片元素")
-                self.take_screenshot(change_page, f"no_captcha_{reg_no}")
-                return False
-            logger.info(f"验证码图片选择器: {captcha_img_sel}")
+            # 确切选择器：img#vimg（全小写），输入框：input#verifyCodetw
             if not self.solve_captcha_with_retry(
                 change_page,
-                captcha_img_sel,
-                'input[name="verifyCodetw"]'
+                'img#vimg',
+                'input#verifyCodetw'
             ):
                 return False
 
@@ -368,17 +314,11 @@ class AnnualReportBot:
             # 等待页面自动加载联络员信息
             time.sleep(2)
 
-            # 图形验证码
-            captcha_img_sel = self._find_captcha_img(page)
-            if not captcha_img_sel:
-                logger.error("登录页找不到验证码图片")
-                self.take_screenshot(page, f"no_captcha_login_{reg_no}")
-                return False
-            logger.info(f"登录页验证码图片选择器: {captcha_img_sel}")
+            # 图形验证码 — 确切选择器：img#vimg，输入框：input#verifyCodetw
             if not self.solve_captcha_with_retry(
                 page,
-                captcha_img_sel,
-                'input[name="verifyCodetw"]'
+                'img#vimg',
+                'input#verifyCodetw'
             ):
                 return False
 

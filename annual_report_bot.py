@@ -239,38 +239,17 @@ class AnnualReportBot:
 
             # ---- 短信验证码 ----
             logger.info("点击获取验证码按钮")
-            # 尝试多种选择器找到获取验证码按钮
-            clicked = False
-            for selector in [
-                'input[value="获取验证码"]',
-                'button:has-text("获取验证码")',
-                'input[value*="验证码"]',
-                'a:has-text("获取验证码")',
-            ]:
+            # 按钮是 a#butn，onclick="getCode2()"
+            try:
+                change_page.locator('a#butn').click(timeout=5000)
+                logger.info("获取验证码按钮点击成功: a#butn")
+            except Exception:
+                # 备选：直接调用JS函数
                 try:
-                    if change_page.locator(selector).count() > 0:
-                        change_page.locator(selector).first.click(timeout=5000)
-                        clicked = True
-                        logger.info(f"获取验证码按钮点击成功: {selector}")
-                        break
-                except Exception:
-                    continue
-            if not clicked:
-                # 用JS点击
-                js_clicked = change_page.evaluate('''() => {
-                    var btns = document.querySelectorAll("input[type='button'],button,a");
-                    for (var i = 0; i < btns.length; i++) {
-                        var txt = btns[i].value || btns[i].textContent || "";
-                        if (txt.indexOf("获取验证码") >= 0 || txt.indexOf("验证码") >= 0) {
-                            btns[i].click();
-                            return "OK:" + txt;
-                        }
-                    }
-                    return "NOT_FOUND";
-                }''')
-                logger.info(f"JS点击获取验证码按钮: {js_clicked}")
-                if js_clicked == "NOT_FOUND":
-                    logger.error("获取验证码按钮未找到！请手动点击")
+                    change_page.evaluate('getCode2()')
+                    logger.info("获取验证码按钮点击成功: JS getCode2()")
+                except Exception as e2:
+                    logger.error(f"获取验证码按钮点击失败: {e2}")
             time.sleep(2)
 
             sms_code = self.sms.wait_for_sms_code(
@@ -343,33 +322,16 @@ class AnnualReportBot:
             ):
                 return False
 
-            # 点击获取短信验证码
-            clicked = False
-            for selector in [
-                'input[value="获取验证码"]',
-                'button:has-text("获取验证码")',
-                'input[value*="验证码"]',
-                'a:has-text("获取验证码")',
-            ]:
+            # 点击获取短信验证码 — 按钮是 a#butn, onclick="getCode2()"
+            try:
+                page.locator('a#butn').click(timeout=5000)
+                logger.info("登录页获取验证码按钮点击成功: a#butn")
+            except Exception:
                 try:
-                    if page.locator(selector).count() > 0:
-                        page.locator(selector).first.click(timeout=5000)
-                        clicked = True
-                        logger.info(f"登录页获取验证码按钮点击成功: {selector}")
-                        break
-                except Exception:
-                    continue
-            if not clicked:
-                page.evaluate('''() => {
-                    var btns = document.querySelectorAll("input[type='button'],button,a");
-                    for (var i = 0; i < btns.length; i++) {
-                        var txt = btns[i].value || btns[i].textContent || "";
-                        if (txt.indexOf("验证码") >= 0 && txt.indexOf("获取") >= 0) {
-                            btns[i].click();
-                            return;
-                        }
-                    }
-                }''')
+                    page.evaluate('getCode2()')
+                    logger.info("登录页获取验证码按钮点击成功: JS getCode2()")
+                except Exception as e2:
+                    logger.error(f"登录页获取验证码按钮点击失败: {e2}")
             time.sleep(2)
 
             # 等待短信验证码

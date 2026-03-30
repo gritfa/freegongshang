@@ -140,13 +140,41 @@ class AnnualReportBot:
             change_page.fill('input[name="liaName_xin"]', new_name)
 
             # 联络员证件类型（下拉选择：中华人民共和国居民身份证）
-            change_page.select_option('select[name="certIdType_xin"]',
-                             label="中华人民共和国居民身份证")
+            logger.info("选择联络员证件类型: 中华人民共和国居民身份证")
+            try:
+                # 先滚动到下拉框位置
+                change_page.locator('select[name="certIdType_xin"]').scroll_into_view_if_needed()
+                time.sleep(0.5)
+                # 尝试用select_option选择
+                change_page.select_option('select[name="certIdType_xin"]',
+                                 label="中华人民共和国居民身份证")
+            except Exception:
+                logger.warning("select_option失败，尝试JS方式选择")
+                try:
+                    # 用JavaScript直接设置下拉框的值
+                    change_page.evaluate('''() => {
+                        const sel = document.querySelector('select[name="certIdType_xin"]');
+                        if (sel) {
+                            for (let i = 0; i < sel.options.length; i++) {
+                                if (sel.options[i].text.includes("居民身份证")) {
+                                    sel.selectedIndex = i;
+                                    sel.dispatchEvent(new Event("change"));
+                                    break;
+                                }
+                            }
+                        }
+                    }''')
+                except Exception as e2:
+                    logger.error(f"下拉框选择失败: {e2}")
+            logger.info("证件类型选择完成")
+            time.sleep(0.5)
 
             # 新联络员证件号码
+            logger.info(f"填入新联络员证件号: {new_id[:4]}****")
             change_page.fill('input[name="certId_xin"]', new_id)
 
             # 新联络员手机号码
+            logger.info(f"填入新联络员手机号: {new_phone[:3]}****{new_phone[-3:]}")
             change_page.fill('input[name="mobileTel_xin"]', new_phone)
 
             logger.info("表单数据填入完成，开始处理验证码")

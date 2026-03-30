@@ -134,29 +134,29 @@ class AnnualReportBot:
             # ---- 图形验证码 ----
             if not self.solve_captcha_with_retry(
                 page,
-                'img#imgName',              # 验证码图片
-                'input[name="imgName"]'     # 验证码输入框 - 可能需调整
+                'img[name="vImg"]',              # 验证码图片
+                'input[name="verifyCodeTw"]'     # 验证码输入框
             ):
                 return False
-            
+
             # ---- 短信验证码 ----
-            # 点击获取验证码
-            page.click('button:has-text("获取验证码")')
+            # 点击获取验证码按钮
+            page.click('input[value="获取验证码"], button:has-text("获取验证码")')
             time.sleep(1)
-            
+
             # 等待人工输入短信验证码
             sms_code = self.sms.wait_for_sms_code(
-                config.NEW_LIAISON["phone"], 
+                config.NEW_LIAISON["phone"],
                 purpose=f"联络员变更-{enterprise.get('企业名称', '')}"
             )
             if not sms_code:
                 logger.error("未获取到短信验证码")
                 return False
-            
-            page.fill('input[name="smsCode"]', sms_code)
-            
+
+            page.fill('input[name="verifyCode"]', sms_code)
+
             # ---- 提交 ----
-            page.click('button:has-text("保 存"), input[value="保 存"]')
+            page.click('input[value="保 存"], button:has-text("保 存")')
             time.sleep(3)
             
             # 判断是否成功
@@ -202,15 +202,15 @@ class AnnualReportBot:
             # 图形验证码
             if not self.solve_captcha_with_retry(
                 page,
-                'img#imgName',
-                'input[name="imgName"]'
+                'img[name="vImg"]',
+                'input[name="verifyCodeTw"]'
             ):
                 return False
-            
+
             # 点击获取短信验证码
-            page.click('button:has-text("获取验证码"), input[value="获取验证码"]')
+            page.click('input[value="获取验证码"], button:has-text("获取验证码")')
             time.sleep(1)
-            
+
             # 等待短信验证码
             sms_code = self.sms.wait_for_sms_code(
                 config.NEW_LIAISON["phone"],
@@ -218,11 +218,11 @@ class AnnualReportBot:
             )
             if not sms_code:
                 return False
-            
-            page.fill('input[name="smsCode"]', sms_code)
-            
+
+            page.fill('input[name="verifyCode"]', sms_code)
+
             # 点击登录
-            page.click('button:has-text("登录"), input[value="登录"]')
+            page.click('input[value="登录"], button:has-text("登录")')
             time.sleep(3)
             
             # 判断登录结果

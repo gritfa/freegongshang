@@ -100,40 +100,56 @@ class AnnualReportBot:
             page.goto(config.LOGIN_URL, wait_until="domcontentloaded")
             time.sleep(3)
 
-            # 点击页面底部的【联络员变更】链接
-            page.click('a:has-text("联络员变更")')
-            time.sleep(3)
+            # 点击【联络员变更】链接，可能打开新标签页
+            with page.context.expect_page() as new_page_info:
+                page.click('a:has-text("联络员变更")')
 
-            # 等待联络员变更页面加载
-            page.wait_for_load_state("domcontentloaded")
+            # 如果打开了新标签页，切换到新页面
+            try:
+                change_page = new_page_info.value
+                change_page.wait_for_load_state("domcontentloaded")
+                logger.info("联络员变更在新标签页打开")
+            except Exception:
+                # 没有新标签页，说明是在当前页面跳转
+                change_page = page
+                time.sleep(3)
+                change_page.wait_for_load_state("domcontentloaded")
+                logger.info("联络员变更在当前页面跳转")
+
             time.sleep(2)
+            logger.info(f"当前页面URL: {change_page.url}")
 
             # ---- 填写表单 ----
             # 统一社会信用代码/注册号
-            page.fill('input#regNo', reg_no)
+            change_page.fill('input#regNo', reg_no)
 
             # 法定代表人姓名
-            page.fill('input[name="leRep"]', enterprise.get("法定代表人", ""))
+            logger.info(f"填入法定代表人: {enterprise.get('法定代表人', '')}")
+            change_page.fill('input[name="leRep"]', enterprise.get("法定代表人", ""))
 
             # 法定代表人证件号码
-            page.fill('input[name="certId"]', enterprise.get("身份证", ""))
+            logger.info(f"填入法定代表人证件号: {enterprise.get('身份证', '')[:4]}****")
+            change_page.fill('input[name="certId"]', enterprise.get("身份证", ""))
 
             # ---- 新联络员信息 ----
-            page.fill('input[name="liaName_xin"]', config.NEW_LIAISON["name"])
+            logger.info(f"填入新联络员姓名: {config.NEW_LIAISON['name']}")
+            change_page.fill('input[name="liaName_xin"]', config.NEW_LIAISON["name"])
 
             # 联络员证件类型（下拉选择）
-            page.select_option('select[name="certIdType_xin"]',
+            change_page.select_option('select[name="certIdType_xin"]',
                              label=config.NEW_LIAISON["id_type"])
 
             # 新联络员证件号码
-            page.fill('input[name="certId_xin"]', config.NEW_LIAISON["id_number"])
+            change_page.fill('input[name="certId_xin"]', config.NEW_LIAISON["id_number"])
 
             # 新联络员手机号码
-            page.fill('input[name="mobileTel_xin"]', config.NEW_LIAISON["phone"])
+            change_page.fill('input[name="mobileTel_xin"]', config.NEW_LIAISON["phone"])
+
+            logger.info("表单数据填入完成，开始处理验证码")
 
             # ---- 图形验证码 ----
             if not self.solve_captcha_with_retry(
-                page,
+                change_page,
                 'img[name="vImg"]',              # 验证码图片
                 'input[name="verifyCodeTw"]'     # 验证码输入框
             ):
@@ -141,7 +157,7 @@ class AnnualReportBot:
 
             # ---- 短信验证码 ----
             # 点击获取验证码按钮
-            page.click('input[value="获取验证码"], button:has-text("获取验证码")')
+            change_page.click('input[value="获取验证码"], button:has-text("获取验证码")')
             time.sleep(1)
 
             # 等待人工输入短信验证码
@@ -153,22 +169,27 @@ class AnnualReportBot:
                 logger.error("未获取到短信验证码")
                 return False
 
-            page.fill('input[name="verifyCode"]', sms_code)
+            change_page.fill('input[name="verifyCode"]', sms_code)
 
             # ---- 提交 ----
-            page.click('input[value="保 存"], button:has-text("保 存")')
+            change_page.click('input[value="保 存"], button:has-text("保 存")')
             time.sleep(3)
-            
+
             # 判断是否成功
-            self.take_screenshot(page, f"change_liaison_{reg_no}")
+            self.take_screenshot(change_page, f"change_liaison_{reg_no}")
             
             # 检查页面是否有成功提示
-            if page.locator('text=成功').count() > 0 or page.locator('text=变更成功').count() > 0:
+            if change_page.locator('text=成功').count() > 0 or change_page.locator('text=变更成功').count() > 0:
                 logger.info(f"联络员变更成功: {reg_no}")
+                # 如果是新标签页，关闭它
+                if change_page != page:
+                    change_page.close()
                 return True
             else:
-                page_text = page.inner_text("body")
+                page_text = change_page.inner_text("body")
                 logger.warning(f"联络员变更结果不确定: {page_text[:200]}")
+                if change_page != page:
+                    change_page.close()
                 return False
                 
         except Exception as e:

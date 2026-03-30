@@ -40,80 +40,77 @@ class AnnualReportBot:
         logger.info(f"截图已保存: {path}")
         return path
     
-    def solve_captcha_with_retry(self, page: Page, captcha_img_selector: str, 
+    def solve_captcha_with_retry(self, page: Page, captcha_img_selector: str,
                                   captcha_input_selector: str) -> bool:
-        """识别并填写图形验证码，支持重试
-        
-        Args:
-            page: 页面对象
-            captcha_img_selector: 验证码图片选择器
-            captcha_input_selector: 验证码输入框选择器
-        Returns:
-            是否成功填写
-        """
+        """识别并填写图形验证码，支持重试"""
+        import base64
         for attempt in range(config.CAPTCHA_MAX_RETRY):
             try:
-                # 等待验证码图片加载
                 page.wait_for_selector(captcha_img_selector, timeout=10000)
-                time.sleep(0.5)  # 等图片完全渲染
-                
-                # 识别验证码（用JS获取图片数据，避免screenshot超时）
-                try:
-                    code = self.captcha.solve_from_element(page, captcha_img_selector)
-                except Exception as screenshot_err:
-                    logger.warning(f"截图方式失败: {screenshot_err}，尝试JS获取图片")
-                    # 用JS获取验证码图片的src，然后fetch获取二进制数据
-                    img_bytes = page.evaluate(f'''async () => {{
-                        const img = document.querySelector('{captcha_img_selector}');
-                        if (!img) return null;
-                        const canvas = document.createElement('canvas');
-                        canvas.width = img.naturalWidth || img.width;
-                        canvas.height = img.naturalHeight || img.height;
-                        const ctx = canvas.getContext('2d');
-                        ctx.drawImage(img, 0, 0);
-                        return canvas.toDataURL('image/png').split(',')[1];
-                    }}''')
-                    if img_bytes:
-                        import base64
-                        raw = base64.b64decode(img_bytes)
-                        code = self.captcha.solve_from_bytes(raw)
-                    else:
-                        logger.error("JS方式也无法获取验证码图片")
-                        continue
-                
-                if not code or len(code) < 4:
+                time.sleep(1)
+
+                # 优先用JS canvas方式获取验证码图片（避免screenshot超时）
+                code = None
+                img_b64 = page.evaluate('''(selector) => {
+                    const img = document.querySelector(selector);
+                    if (!img) return null;
+                    // 等图片加载完
+                    if (!img.complete || img.naturalWidth === 0) return null;
+                    const canvas = document.createElement('canvas');
+                    canvas.width = img.naturalWidth || img.width || 110;
+                    canvas.height = img.naturalHeight || img.height || 35;
+                    const ctx = canvas.getContext('2d');
+                    ctx.drawImage(img, 0, 0);
+                    return canvas.toDataURL('image/png').split(',')[1];
+                }''', captcha_img_selector)
+
+                if img_b64:
+                    raw = base64.b64decode(img_b64)
+                    code = self.captcha.solve_from_bytes(raw)
+                    logger.info(f"JS canvas识别验证码: {code}")
+                else:
+                    # JS canvas失败，尝试直接截图
+                    logger.warning("JS canvas获取失败，尝试截图方式")
+                    try:
+                        code = self.captcha.solve_from_element(page, captcha_img_selector)
+                    except Exception as e2:
+                        logger.error(f"截图方式也失败: {e2}")
+
+                if not code or len(code) < 3:
                     logger.warning(f"验证码识别结果异常: {code}，点击刷新重试")
-                    page.click(captcha_img_selector)  # 点击图片刷新验证码
+                    page.click(captcha_img_selector)
                     time.sleep(1)
                     continue
-                
-                # 填入验证码（先用Playwright fill，失败则用JS）
-                try:
-                    page.fill(captcha_input_selector, code)
-                    logger.info(f"验证码已填入(fill): {code} (第{attempt+1}次)")
-                except Exception as fill_err:
-                    logger.warning(f"fill方式失败: {fill_err}，尝试JS方式")
-                    page.evaluate(f'''() => {{
-                        const el = document.querySelector('{captcha_input_selector}');
-                        if (el) {{
-                            el.value = "{code}";
-                            el.dispatchEvent(new Event("input", {{bubbles: true}}));
-                            el.dispatchEvent(new Event("change", {{bubbles: true}}));
-                        }}
-                    }}''')
-                    logger.info(f"验证码已填入(JS): {code} (第{attempt+1}次)")
-                # 验证是否真的填入了
-                actual = page.evaluate(f'''() => {{
-                    const el = document.querySelector('{captcha_input_selector}');
+
+                # 用JS方式填入验证码（最可靠）
+                page.evaluate('''(args) => {
+                    const el = document.querySelector(args.selector);
+                    if (el) {
+                        el.focus();
+                        el.value = args.code;
+                        el.dispatchEvent(new Event("input", {bubbles: true}));
+                        el.dispatchEvent(new Event("change", {bubbles: true}));
+                    }
+                }''', {"selector": captcha_input_selector, "code": code})
+                time.sleep(0.3)
+
+                # 验证填入结果
+                actual = page.evaluate('''(selector) => {
+                    const el = document.querySelector(selector);
                     return el ? el.value : "NOT_FOUND";
-                }}''')
-                logger.info(f"验证码输入框实际值: {actual}")
-                return True
-                
+                }''', captcha_input_selector)
+                logger.info(f"验证码已填入: {code}, 输入框实际值: {actual} (第{attempt+1}次)")
+
+                if actual == code:
+                    return True
+                else:
+                    logger.warning(f"验证码填入不一致，重试")
+                    continue
+
             except Exception as e:
                 logger.error(f"验证码处理失败(第{attempt+1}次): {e}")
                 time.sleep(1)
-        
+
         logger.error("验证码多次识别失败")
         return False
     
@@ -216,30 +213,68 @@ class AnnualReportBot:
 
             # 联络员证件类型（下拉选择：中华人民共和国居民身份证）
             logger.info("选择联络员证件类型: 中华人民共和国居民身份证")
-            # 用JS遍历所有select元素，找到包含"certid"和"xin"的下拉框
-            select_result = change_page.evaluate('''() => {
+            # 方法1：先尝试Playwright原生select_option
+            try:
+                # 尝试多种可能的选择器
+                select_selectors = [
+                    'select[name="certIdType_xin"]',
+                    'select[name="certidtype_xin"]',
+                    'select#certIdType_xin',
+                    'select#certidtype_xin',
+                ]
+                selected = False
+                for sel in select_selectors:
+                    try:
+                        if change_page.locator(sel).count() > 0:
+                            # 先点击下拉框打开它
+                            change_page.click(sel)
+                            time.sleep(0.5)
+                            # 尝试用label选择
+                            change_page.select_option(sel, label="中华人民共和国居民身份证")
+                            logger.info(f"Playwright select_option 成功: {sel}")
+                            selected = True
+                            break
+                    except Exception as e:
+                        logger.warning(f"select_option失败({sel}): {e}")
+                        continue
+
+                if not selected:
+                    # 方法2：用JS找到下拉框并模拟真实点击选择
+                    logger.info("尝试JS方式选择下拉框")
+                    change_page.evaluate('''() => {
+                        const selects = document.querySelectorAll('select');
+                        for (const sel of selects) {
+                            const name = (sel.name || sel.id || '').toLowerCase();
+                            if (name.includes('certid') || name.includes('cert')) {
+                                for (let i = 0; i < sel.options.length; i++) {
+                                    if (sel.options[i].text.includes('居民身份证')) {
+                                        sel.selectedIndex = i;
+                                        sel.value = sel.options[i].value;
+                                        sel.dispatchEvent(new Event('change', {bubbles: true}));
+                                        sel.dispatchEvent(new Event('input', {bubbles: true}));
+                                        // 也触发click事件
+                                        sel.click();
+                                        break;
+                                    }
+                                }
+                                break;
+                            }
+                        }
+                    }''')
+                    logger.info("JS方式选择完成")
+            except Exception as e:
+                logger.error(f"下拉框选择异常: {e}")
+
+            # 验证下拉框选择结果
+            select_check = change_page.evaluate('''() => {
                 const selects = document.querySelectorAll('select');
-                let target = null;
-                const allNames = [];
+                const results = [];
                 for (const sel of selects) {
-                    allNames.push(sel.name + '|' + sel.id);
-                    if (sel.name.toLowerCase().includes('certid') && sel.name.toLowerCase().includes('xin')) {
-                        target = sel;
-                    }
+                    results.push({name: sel.name, id: sel.id, value: sel.value, text: sel.options[sel.selectedIndex] ? sel.options[sel.selectedIndex].text : 'N/A'});
                 }
-                if (!target) return {found: false, allSelects: allNames.join(', ')};
-                // 列出所有选项
-                const opts = [];
-                for (let i = 0; i < target.options.length; i++) {
-                    opts.push({index: i, value: target.options[i].value, text: target.options[i].text});
-                    if (target.options[i].text.includes('居民身份证')) {
-                        target.selectedIndex = i;
-                        target.dispatchEvent(new Event('change', {bubbles: true}));
-                    }
-                }
-                return {found: true, name: target.name, selectedValue: target.value, selectedText: target.options[target.selectedIndex].text, allOptions: opts};
+                return results;
             }''')
-            logger.info(f"下拉框选择结果: {select_result}")
+            logger.info(f"下拉框当前状态: {select_check}")
             time.sleep(0.5)
 
             # 新联络员证件号码

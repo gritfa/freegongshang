@@ -57,8 +57,29 @@ class AnnualReportBot:
                 page.wait_for_selector(captcha_img_selector, timeout=10000)
                 time.sleep(0.5)  # 等图片完全渲染
                 
-                # 识别验证码
-                code = self.captcha.solve_from_element(page, captcha_img_selector)
+                # 识别验证码（用JS获取图片数据，避免screenshot超时）
+                try:
+                    code = self.captcha.solve_from_element(page, captcha_img_selector)
+                except Exception as screenshot_err:
+                    logger.warning(f"截图方式失败: {screenshot_err}，尝试JS获取图片")
+                    # 用JS获取验证码图片的src，然后fetch获取二进制数据
+                    img_bytes = page.evaluate(f'''async () => {{
+                        const img = document.querySelector('{captcha_img_selector}');
+                        if (!img) return null;
+                        const canvas = document.createElement('canvas');
+                        canvas.width = img.naturalWidth || img.width;
+                        canvas.height = img.naturalHeight || img.height;
+                        const ctx = canvas.getContext('2d');
+                        ctx.drawImage(img, 0, 0);
+                        return canvas.toDataURL('image/png').split(',')[1];
+                    }}''')
+                    if img_bytes:
+                        import base64
+                        raw = base64.b64decode(img_bytes)
+                        code = self.captcha.solve_from_bytes(raw)
+                    else:
+                        logger.error("JS方式也无法获取验证码图片")
+                        continue
                 
                 if not code or len(code) < 4:
                     logger.warning(f"验证码识别结果异常: {code}，点击刷新重试")
@@ -195,42 +216,30 @@ class AnnualReportBot:
 
             # 联络员证件类型（下拉选择：中华人民共和国居民身份证）
             logger.info("选择联络员证件类型: 中华人民共和国居民身份证")
-            # 先列出所有选项供调试
-            options_info = change_page.evaluate('''() => {
-                const sel = document.querySelector('select[name="certIdType_xin"]') || document.querySelector('#certIdType_xin');
-                if (!sel) return "下拉框未找到";
-                const opts = [];
-                for (let i = 0; i < sel.options.length; i++) {
-                    opts.push({index: i, value: sel.options[i].value, text: sel.options[i].text});
-                }
-                return JSON.stringify(opts);
-            }''')
-            logger.info(f"下拉框所有选项: {options_info}")
-
-            # 尝试多种方式选择
-            # 方式1：Playwright select_option
-            try:
-                change_page.select_option('select[name="certIdType_xin"]', value="1")
-                logger.info("select_option(value=1) 成功")
-            except Exception as e1:
-                logger.warning(f"select_option失败: {e1}")
-                # 方式2：JS直接设值
-                change_page.evaluate('''() => {
-                    const sel = document.querySelector('select[name="certIdType_xin"]') || document.querySelector('#certIdType_xin');
-                    if (sel) {
-                        sel.value = "1";
-                        sel.dispatchEvent(new Event("change", {bubbles: true}));
+            # 用JS遍历所有select元素，找到包含"certid"和"xin"的下拉框
+            select_result = change_page.evaluate('''() => {
+                const selects = document.querySelectorAll('select');
+                let target = null;
+                const allNames = [];
+                for (const sel of selects) {
+                    allNames.push(sel.name + '|' + sel.id);
+                    if (sel.name.toLowerCase().includes('certid') && sel.name.toLowerCase().includes('xin')) {
+                        target = sel;
                     }
-                }''')
-                logger.info("JS方式设置下拉框值")
-
-            time.sleep(0.5)
-            # 验证选择结果
-            selected = change_page.evaluate('''() => {
-                const sel = document.querySelector('select[name="certIdType_xin"]') || document.querySelector('#certIdType_xin');
-                return sel ? {value: sel.value, text: sel.options[sel.selectedIndex].text} : "未找到";
+                }
+                if (!target) return {found: false, allSelects: allNames.join(', ')};
+                // 列出所有选项
+                const opts = [];
+                for (let i = 0; i < target.options.length; i++) {
+                    opts.push({index: i, value: target.options[i].value, text: target.options[i].text});
+                    if (target.options[i].text.includes('居民身份证')) {
+                        target.selectedIndex = i;
+                        target.dispatchEvent(new Event('change', {bubbles: true}));
+                    }
+                }
+                return {found: true, name: target.name, selectedValue: target.value, selectedText: target.options[target.selectedIndex].text, allOptions: opts};
             }''')
-            logger.info(f"证件类型已选择: {selected}")
+            logger.info(f"下拉框选择结果: {select_result}")
             time.sleep(0.5)
 
             # 新联络员证件号码
@@ -254,7 +263,7 @@ class AnnualReportBot:
             if not self.solve_captcha_with_retry(
                 change_page,
                 captcha_img_sel,
-                'input[name="verifyCodeTw"]'
+                'input[name="verifyCodetw"]'
             ):
                 return False
 
@@ -334,7 +343,7 @@ class AnnualReportBot:
             if not self.solve_captcha_with_retry(
                 page,
                 captcha_img_sel,
-                'input[name="verifyCodeTw"]'
+                'input[name="verifyCodetw"]'
             ):
                 return False
 

@@ -81,9 +81,11 @@ class AnnualReportBot:
     def _find_captcha_img(self, page: Page) -> str:
         """尝试多种选择器找到验证码图片"""
         selectors = [
+            'img#vimg',
+            'img[name="验证码"]',
+            'img[id="vimg"]',
             'img#vImg',
             'img[name="vImg"]',
-            'img[id="vImg"]',
             'img.verifyImg',
             'img[src*="captcha"]',
             'img[src*="verify"]',
@@ -173,26 +175,28 @@ class AnnualReportBot:
             logger.info(f"填入新联络员姓名: {new_name}")
             change_page.fill('input[name="liaName_xin"]', new_name)
 
-            # 联络员证件类型（下拉选择：中华人民共和国居民身份证，value="1"）
+            # 联络员证件类型（下拉选择：中华人民共和国居民身份证）
             logger.info("选择联络员证件类型: 中华人民共和国居民身份证")
-            try:
-                change_page.locator('select[name="certIdType_xin"]').scroll_into_view_if_needed()
-                time.sleep(0.5)
-                change_page.select_option('select[name="certIdType_xin"]', value="1")
-                logger.info("证件类型选择完成（value=1）")
-            except Exception as e1:
-                logger.warning(f"select_option(value)失败: {e1}，尝试label方式")
-                try:
-                    change_page.select_option('select[name="certIdType_xin"]',
-                                     label="中华人民共和国居民身份证")
-                    logger.info("证件类型选择完成（label方式）")
-                except Exception as e2:
-                    logger.warning(f"label方式也失败: {e2}，尝试JS方式")
-                    change_page.evaluate('''() => {
-                        const sel = document.querySelector('select[name="certIdType_xin"]');
-                        if (sel) { sel.value = "1"; sel.dispatchEvent(new Event("change", {bubbles:true})); }
-                    }''')
-                    logger.info("证件类型选择完成（JS方式）")
+            # 先用JS设置值（最可靠），再用Playwright触发
+            change_page.evaluate('''() => {
+                const sel = document.querySelector('select[name="certIdType_xin"]') || document.querySelector('#certIdType_xin');
+                if (sel) {
+                    for (let i = 0; i < sel.options.length; i++) {
+                        if (sel.options[i].text.indexOf("居民身份证") >= 0) {
+                            sel.selectedIndex = i;
+                            sel.dispatchEvent(new Event("change", {bubbles: true}));
+                            break;
+                        }
+                    }
+                }
+            }''')
+            time.sleep(0.5)
+            # 验证选择结果
+            selected = change_page.evaluate('''() => {
+                const sel = document.querySelector('select[name="certIdType_xin"]') || document.querySelector('#certIdType_xin');
+                return sel ? sel.options[sel.selectedIndex].text : "未找到";
+            }''')
+            logger.info(f"证件类型已选择: {selected}")
             time.sleep(0.5)
 
             # 新联络员证件号码

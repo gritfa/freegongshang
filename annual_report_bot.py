@@ -92,25 +92,40 @@ class AnnualReportBot:
                     time.sleep(1)
                     continue
 
-                # 填入验证码：先清空再输入
-                page.click(captcha_input_selector)
-                page.fill(captcha_input_selector, "")
-                page.fill(captcha_input_selector, code)
+                # 填入验证码：三种方式依次尝试
+                # 方式1：点击输入框，清空，逐字输入（模拟真实键盘）
+                inp = page.locator(captcha_input_selector)
+                inp.click()
+                time.sleep(0.2)
+                page.keyboard.press("Control+a")
+                page.keyboard.press("Delete")
+                time.sleep(0.1)
+                inp.type(code, delay=50)
                 time.sleep(0.3)
 
                 # 验证填入结果
                 actual = page.input_value(captcha_input_selector)
-                logger.info(f"验证码已填入: {code}, 输入框实际值: {actual} (第{attempt+1}次)")
+                logger.info(f"验证码type填入: {code}, 实际值: {actual} (第{attempt+1}次)")
 
                 if actual == code:
                     return True
-                else:
-                    logger.warning(f"验证码填入不一致，尝试JS方式填入")
-                    page.evaluate('''(args) => {
-                        var el = document.getElementById(args.id);
-                        if (el) { el.value = args.code; }
-                    }''', {"id": "verifyCodetw", "code": code})
-                    return True
+
+                # 方式2：JS直接设置value
+                logger.warning(f"type方式填入不一致({actual})，尝试JS方式")
+                page.evaluate(f'''() => {{
+                    var el = document.querySelector('{captcha_input_selector}');
+                    if (!el) el = document.getElementById('verifyCodetw');
+                    if (el) {{
+                        el.focus();
+                        el.value = '{code}';
+                        el.dispatchEvent(new Event('input', {{bubbles:true}}));
+                        el.dispatchEvent(new Event('change', {{bubbles:true}}));
+                    }}
+                }}''')
+                time.sleep(0.3)
+                actual2 = page.input_value(captcha_input_selector)
+                logger.info(f"JS填入后实际值: {actual2}")
+                return True
 
             except Exception as e:
                 logger.error(f"验证码处理失败(第{attempt+1}次): {e}")
@@ -175,28 +190,28 @@ class AnnualReportBot:
             time.sleep(0.3)
 
             # ---- 下拉框：选择中华人民共和国居民身份证 ----
-            # 确切选择器：select#cerIdType_xin，value="1"=居民身份证
-            logger.info("选择联络员证件类型: 中华人民共和国居民身份证 (value=1)")
-            # 先点击下拉框激活它
-            change_page.click('select#cerIdType_xin')
+            logger.info("选择联络员证件类型: 中华人民共和国居民身份证")
+            dropdown = change_page.locator('select#cerIdType_xin')
+            dropdown.scroll_into_view_if_needed()
+            time.sleep(0.3)
+            # 用select_option直接选value="1"
+            dropdown.select_option(value="1")
             time.sleep(0.5)
-            # 用Playwright的select_option
-            change_page.select_option('select#cerIdType_xin', value="1")
-            time.sleep(0.5)
-            # 验证选择结果
+            # 验证
             selected = change_page.evaluate('document.getElementById("cerIdType_xin").value')
-            logger.info(f"下拉框当前值: {selected}")
+            logger.info(f"下拉框选择后值: {selected}")
             if selected != "1":
-                logger.warning(f"select_option后值不对({selected})，用JS强制设置")
-                change_page.evaluate('''() => {
-                    var sel = document.getElementById("cerIdType_xin");
-                    sel.selectedIndex = 1;
-                    sel.value = "1";
-                    sel.dispatchEvent(new Event("change", {bubbles: true}));
-                }''')
+                # 备选：用键盘操作选择
+                logger.warning(f"select_option失败({selected})，改用键盘方式")
+                dropdown.click()
+                time.sleep(0.3)
+                # 按下箭头选第一个选项（跳过"请选择"）
+                change_page.keyboard.press("ArrowDown")
+                time.sleep(0.1)
+                change_page.keyboard.press("Enter")
                 time.sleep(0.3)
                 selected2 = change_page.evaluate('document.getElementById("cerIdType_xin").value')
-                logger.info(f"JS设置后下拉框值: {selected2}")
+                logger.info(f"键盘方式后下拉框值: {selected2}")
 
             # 新联络员证件号码
             logger.info(f"填入新联络员证件号: {new_id[:4]}****")

@@ -1,6 +1,5 @@
-__pycache__/
 *.pyc
-data/*.xlsx
+__pycache__/
 screenshots/
 logs/
-.env
+data/

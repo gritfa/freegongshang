@@ -16,13 +16,13 @@ from loguru import logger
 import config
 from captcha_solver import CaptchaSolver
 from data_reader import read_enterprise_data, read_annual_report_data
-from sms_handler import SmsHandler
+from sms_handler import create_sms_handler
 
 
 class AnnualReportBot:
     def __init__(self):
         self.captcha = CaptchaSolver()
-        self.sms = SmsHandler()
+        self.sms = create_sms_handler()
         self.results = []  # 记录每家企业的处理结果
         
         # 确保目录存在

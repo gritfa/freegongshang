@@ -27,6 +27,12 @@ CAPTCHA_MAX_RETRY = 5
 # 短信验证码等待超时（秒）
 SMS_WAIT_TIMEOUT = 120
 
+# 短信自动接收模式: "manual"=手动输入, "http"=HTTP接收(SmsForwarder)
+SMS_MODE = "http"
+
+# HTTP短信接收服务端口（SmsForwarder转发到这个端口）
+SMS_HTTP_PORT = 5000
+
 # 截图保存目录
 SCREENSHOT_DIR = "screenshots"
 

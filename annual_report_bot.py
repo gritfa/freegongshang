@@ -110,32 +110,32 @@ class AnnualReportBot:
 
             # ---- 填写表单 ----
             # 统一社会信用代码/注册号
-            page.fill('input[name="regno"]', reg_no)
+            page.fill('input#regNo', reg_no)
 
             # 法定代表人姓名
-            page.fill('input[name="lerep"]', enterprise.get("法定代表人", ""))
+            page.fill('input[name="leRep"]', enterprise.get("法定代表人", ""))
 
             # 法定代表人证件号码
-            page.fill('input[name="lerepCerno"]', enterprise.get("身份证", ""))
+            page.fill('input[name="certId"]', enterprise.get("身份证", ""))
 
             # ---- 新联络员信息 ----
-            page.fill('input[name="newLiaisonName"]', config.NEW_LIAISON["name"])
+            page.fill('input[name="liaName_xin"]', config.NEW_LIAISON["name"])
 
             # 联络员证件类型（下拉选择）
-            page.select_option('select[name="newLiaisonCertype"]',
+            page.select_option('select[name="certIdType_xin"]',
                              label=config.NEW_LIAISON["id_type"])
 
             # 新联络员证件号码
-            page.fill('input[name="newLiaisonCerno"]', config.NEW_LIAISON["id_number"])
+            page.fill('input[name="certId_xin"]', config.NEW_LIAISON["id_number"])
 
             # 新联络员手机号码
-            page.fill('input[name="newLiaisonPhone"]', config.NEW_LIAISON["phone"])
-            
+            page.fill('input[name="mobileTel_xin"]', config.NEW_LIAISON["phone"])
+
             # ---- 图形验证码 ----
             if not self.solve_captcha_with_retry(
-                page, 
-                'img#captchaImg',      # 验证码图片选择器 - 需调整
-                'input[name="captcha"]' # 验证码输入框选择器 - 需调整
+                page,
+                'img#imgName',              # 验证码图片
+                'input[name="imgName"]'     # 验证码输入框 - 可能需调整
             ):
                 return False
             
@@ -194,16 +194,16 @@ class AnnualReportBot:
             time.sleep(3)
 
             # 填入注册号
-            page.fill('input[name="regno"]', reg_no)
-            
+            page.fill('input#regNo', reg_no)
+
             # 等待页面自动加载联络员信息
             time.sleep(2)
-            
+
             # 图形验证码
             if not self.solve_captcha_with_retry(
                 page,
-                'img#captchaImg',       # 需调整
-                'input[name="captcha"]'  # 需调整
+                'img#imgName',
+                'input[name="imgName"]'
             ):
                 return False
             

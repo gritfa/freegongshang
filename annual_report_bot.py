@@ -250,17 +250,17 @@ class AnnualReportBot:
 
             # ---- 短信验证码 ----
             logger.info("点击获取验证码按钮")
-            # 按钮是 a#butn，onclick="getCode2()"
+            # 按钮是 a#butn 里面套了 <img>，直接用JS调用 onclick 函数最可靠
             try:
-                change_page.locator('a#butn').click(timeout=5000)
-                logger.info("获取验证码按钮点击成功: a#butn")
-            except Exception:
-                # 备选：直接调用JS函数
+                change_page.evaluate('getCode2()')
+                logger.info("获取验证码: JS getCode2() 调用成功")
+            except Exception as e1:
+                logger.warning(f"JS getCode2() 失败: {e1}，尝试点击按钮")
                 try:
-                    change_page.evaluate('getCode2()')
-                    logger.info("获取验证码按钮点击成功: JS getCode2()")
+                    change_page.evaluate('document.getElementById("butn").click()')
+                    logger.info("获取验证码: JS click butn 成功")
                 except Exception as e2:
-                    logger.error(f"获取验证码按钮点击失败: {e2}")
+                    logger.error(f"获取验证码按钮全部失败: {e2}")
             time.sleep(2)
 
             sms_code = self.sms.wait_for_sms_code(
@@ -333,16 +333,17 @@ class AnnualReportBot:
             ):
                 return False
 
-            # 点击获取短信验证码 — 按钮是 a#butn, onclick="getCode2()"
+            # 点击获取短信验证码 — 直接用JS调用函数
             try:
-                page.locator('a#butn').click(timeout=5000)
-                logger.info("登录页获取验证码按钮点击成功: a#butn")
-            except Exception:
+                page.evaluate('getCode2()')
+                logger.info("登录页获取验证码: JS getCode2() 调用成功")
+            except Exception as e1:
+                logger.warning(f"登录页JS getCode2() 失败: {e1}，尝试点击按钮")
                 try:
-                    page.evaluate('getCode2()')
-                    logger.info("登录页获取验证码按钮点击成功: JS getCode2()")
+                    page.evaluate('document.getElementById("butn").click()')
+                    logger.info("登录页获取验证码: JS click butn 成功")
                 except Exception as e2:
-                    logger.error(f"登录页获取验证码按钮点击失败: {e2}")
+                    logger.error(f"登录页获取验证码按钮全部失败: {e2}")
             time.sleep(2)
 
             # 等待短信验证码

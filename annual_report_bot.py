@@ -131,19 +131,23 @@ class AnnualReportBot:
             logger.info(f"填入法定代表人证件号: {enterprise.get('身份证', '')[:4]}****")
             change_page.fill('input[name="certId"]', enterprise.get("身份证", ""))
 
-            # ---- 新联络员信息 ----
-            logger.info(f"填入新联络员姓名: {config.NEW_LIAISON['name']}")
-            change_page.fill('input[name="liaName_xin"]', config.NEW_LIAISON["name"])
+            # ---- 新联络员信息（从Excel读取）----
+            new_name = enterprise.get("新联络员姓名", "")
+            new_id = enterprise.get("新联络员身份证", "")
+            new_phone = enterprise.get("新联络员手机号", "")
 
-            # 联络员证件类型（下拉选择）
+            logger.info(f"填入新联络员姓名: {new_name}")
+            change_page.fill('input[name="liaName_xin"]', new_name)
+
+            # 联络员证件类型（下拉选择：中华人民共和国居民身份证）
             change_page.select_option('select[name="certIdType_xin"]',
-                             label=config.NEW_LIAISON["id_type"])
+                             label="中华人民共和国居民身份证")
 
             # 新联络员证件号码
-            change_page.fill('input[name="certId_xin"]', config.NEW_LIAISON["id_number"])
+            change_page.fill('input[name="certId_xin"]', new_id)
 
             # 新联络员手机号码
-            change_page.fill('input[name="mobileTel_xin"]', config.NEW_LIAISON["phone"])
+            change_page.fill('input[name="mobileTel_xin"]', new_phone)
 
             logger.info("表单数据填入完成，开始处理验证码")
 
@@ -162,7 +166,7 @@ class AnnualReportBot:
 
             # 等待人工输入短信验证码
             sms_code = self.sms.wait_for_sms_code(
-                config.NEW_LIAISON["phone"],
+                new_phone,
                 purpose=f"联络员变更-{enterprise.get('企业名称', '')}"
             )
             if not sms_code:
@@ -199,17 +203,18 @@ class AnnualReportBot:
     
     # ==================== 联络员登录 ====================
     
-    def login(self, page: Page, reg_no: str) -> bool:
+    def login(self, page: Page, reg_no: str, phone: str = "") -> bool:
         """联络员登录
-        
+
         Args:
             page: 页面对象
             reg_no: 统一社会信用代码/注册号
+            phone: 联络员手机号（用于提示短信验证码）
         Returns:
             登录是否成功
         """
         logger.info(f"开始登录: {reg_no}")
-        
+
         try:
             page.goto(config.LOGIN_URL, wait_until="domcontentloaded")
             time.sleep(3)
@@ -234,7 +239,7 @@ class AnnualReportBot:
 
             # 等待短信验证码
             sms_code = self.sms.wait_for_sms_code(
-                config.NEW_LIAISON["phone"],
+                phone,
                 purpose=f"登录-{reg_no}"
             )
             if not sms_code:
@@ -371,8 +376,9 @@ class AnnualReportBot:
                 logger.error(f"联络员变更失败，跳过此企业: {reg_no}")
                 return result
         
-        # 步骤2：登录
-        if self.login(page, reg_no):
+        # 步骤2：登录（用新联络员手机号）
+        phone = enterprise.get("新联络员手机号", "")
+        if self.login(page, reg_no, phone):
             result["登录"] = "成功"
         else:
             result["登录"] = "失败"

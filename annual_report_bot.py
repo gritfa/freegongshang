@@ -173,71 +173,80 @@ class AnnualReportBot:
 
             time.sleep(2)
 
-            # ---- 填写表单 ----
-            logger.info(f"填入注册号: {reg_no}")
-            change_page.fill('input#regNo', reg_no)
-            time.sleep(1)
-
-            logger.info(f"填入法定代表人: {enterprise.get('法定代表人', '')}")
-            change_page.fill('input[name="leRep"]', enterprise.get("法定代表人", ""))
-            time.sleep(1)
-
-            logger.info(f"填入法定代表人证件号: {enterprise.get('身份证', '')[:4]}****")
-            change_page.fill('input[name="certId"]', enterprise.get("身份证", ""))
-            time.sleep(1)
-
-            # ---- 新联络员信息（从Excel读取）----
+            # ---- 用JS填写所有表单字段（最可靠的方式）----
             new_name = enterprise.get("新联络员姓名", "")
             new_id = enterprise.get("新联络员身份证", "")
             new_phone = enterprise.get("新联络员手机号", "")
 
-            logger.info(f"填入新联络员姓名: {new_name}")
-            change_page.fill('input[name="liaName_xin"]', new_name)
-            time.sleep(1)
+            fields_to_fill = [
+                ("regNo", reg_no, "注册号"),
+                ("leRep", enterprise.get("法定代表人", ""), "法定代表人"),
+                ("certId", enterprise.get("身份证", ""), "法定代表人证件号"),
+                ("liaName_xin", new_name, "新联络员姓名"),
+                ("certId_xin", new_id, "新联络员证件号"),
+                ("mobileTel_xin", new_phone, "新联络员手机号"),
+            ]
 
-            # ---- 下拉框：选择中华人民共和国居民身份证（全部用JS操作）----
+            for field_name, field_value, field_label in fields_to_fill:
+                if not field_value:
+                    logger.warning(f"字段为空，跳过: {field_label}")
+                    continue
+                # 先用Playwright的type()模拟键盘输入
+                try:
+                    selector = f'input[name="{field_name}"]'
+                    change_page.wait_for_selector(selector, timeout=5000, state="visible")
+                    change_page.click(selector)
+                    time.sleep(0.3)
+                    change_page.fill(selector, "")  # 先清空
+                    change_page.type(selector, field_value, delay=50)  # 逐字输入
+                    time.sleep(0.5)
+                    # 验证填入结果
+                    actual = change_page.input_value(selector)
+                    if actual == field_value:
+                        logger.info(f"填入成功: {field_label} = {field_value[:6]}...")
+                    else:
+                        logger.warning(f"填入值不一致: {field_label} 期望={field_value[:6]} 实际={actual[:6]}")
+                        # JS备选
+                        change_page.evaluate(f'''() => {{
+                            var el = document.querySelector('input[name="{field_name}"]');
+                            if(el) {{ el.value = "{field_value}"; el.dispatchEvent(new Event("input",{{bubbles:true}})); el.dispatchEvent(new Event("change",{{bubbles:true}})); }}
+                        }}''')
+                except Exception as e:
+                    logger.warning(f"Playwright填入失败({field_label}): {e}，用JS方式")
+                    change_page.evaluate(f'''() => {{
+                        var el = document.querySelector('input[name="{field_name}"]');
+                        if(el) {{ el.focus(); el.value = "{field_value}"; el.dispatchEvent(new Event("input",{{bubbles:true}})); el.dispatchEvent(new Event("change",{{bubbles:true}})); }}
+                    }}''')
+                time.sleep(0.5)
+
+            # ---- 下拉框：选择中华人民共和国居民身份证 ----
             logger.info("选择联络员证件类型: 中华人民共和国居民身份证")
+            # 先用Playwright原生select_option
+            try:
+                change_page.select_option('select#cerIdType_xin', value="1")
+                selected = change_page.input_value('select#cerIdType_xin')
+                logger.info(f"下拉框Playwright选择结果: value={selected}")
+            except Exception as e:
+                logger.warning(f"Playwright select_option失败: {e}，用JS方式")
+            # 不管上面是否成功，都用JS再设置一次确保生效
             select_result = change_page.evaluate('''() => {
-                // 按id查找
                 var sel = document.getElementById("cerIdType_xin");
-                // 备选：按name查找（兼容大小写）
                 if (!sel) {
                     var selects = document.querySelectorAll("select");
                     for (var i = 0; i < selects.length; i++) {
                         var n = (selects[i].name || "").toLowerCase();
-                        if (n.indexOf("certid") >= 0 || n.indexOf("cerid") >= 0) {
-                            sel = selects[i];
-                            break;
-                        }
+                        if (n.indexOf("cerid") >= 0) { sel = selects[i]; break; }
                     }
                 }
                 if (!sel) return "SELECT_NOT_FOUND";
-                // 遍历选项，找到居民身份证
-                for (var j = 0; j < sel.options.length; j++) {
-                    if (sel.options[j].text.indexOf("居民身份证") >= 0) {
-                        sel.selectedIndex = j;
-                        sel.value = sel.options[j].value;
-                        sel.dispatchEvent(new Event("change", {bubbles: true}));
-                        return "OK:" + sel.options[j].text;
-                    }
-                }
-                // 如果没找到文字匹配，直接选value="1"
                 sel.value = "1";
+                sel.selectedIndex = 1;
                 sel.dispatchEvent(new Event("change", {bubbles: true}));
-                return "FALLBACK:" + sel.value;
+                return "设置值=" + sel.value + " 文本=" + sel.options[sel.selectedIndex].text;
             }''')
-            logger.info(f"下拉框选择结果: {select_result}")
+            logger.info(f"下拉框JS设置结果: {select_result}")
 
-            # 新联络员证件号码
-            logger.info(f"填入新联络员证件号: {new_id[:4]}****")
-            change_page.fill('input[name="certId_xin"]', new_id)
             time.sleep(1)
-
-            # 新联络员手机号码
-            logger.info(f"填入新联络员手机号: {new_phone[:3]}****{new_phone[-3:]}")
-            change_page.fill('input[name="mobileTel_xin"]', new_phone)
-            time.sleep(1)
-
             logger.info("表单数据填入完成，开始处理验证码")
 
             # ---- 图形验证码 ----

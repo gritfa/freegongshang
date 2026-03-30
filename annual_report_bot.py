@@ -40,47 +40,45 @@ class AnnualReportBot:
         logger.info(f"截图已保存: {path}")
         return path
     
-    def solve_captcha_with_retry(self, page: Page, captcha_img_selector: str,
+    def solve_captcha_with_retry(self, page, captcha_img_selector: str,
                                   captcha_input_selector: str) -> bool:
-        """识别并填写图形验证码，支持重试"""
-        import urllib.request
-        import base64
+        """识别并填写图形验证码，支持重试。page可以是Page或Frame对象。"""
         for attempt in range(config.CAPTCHA_MAX_RETRY):
             try:
                 # 等待验证码图片出现
                 page.wait_for_selector('img#vimg', timeout=10000)
                 time.sleep(1)
 
-                # 用JS获取验证码图片src
-                img_src = page.evaluate('() => { var img = document.getElementById("vimg"); return img ? img.src : null; }')
+                # 主要方式：Playwright截图
                 code = None
-
-                if img_src:
-                    logger.info(f"验证码图片地址: {img_src}")
-                    cookies = page.context.cookies()
-                    cookie_str = "; ".join([f"{c['name']}={c['value']}" for c in cookies])
-
-                    req = urllib.request.Request(img_src)
-                    req.add_header("Cookie", cookie_str)
-                    req.add_header("Referer", page.url)
-                    req.add_header("User-Agent", "Mozilla/5.0")
+                try:
+                    img_el = page.locator('img#vimg')
+                    img_el.wait_for(timeout=10000)
+                    time.sleep(0.5)
+                    img_bytes = img_el.screenshot(timeout=15000)
+                    code = self.captcha.solve_from_bytes(img_bytes)
+                    logger.info(f"截图识别验证码: {code}")
+                except Exception as ss_err:
+                    logger.warning(f"截图方式失败: {ss_err}")
+                    # 备选：用JS获取base64图片数据
                     try:
-                        with urllib.request.urlopen(req, timeout=10) as resp:
-                            raw = resp.read()
-                        if raw and len(raw) > 100:
+                        b64_data = page.evaluate('''() => {
+                            var img = document.getElementById("vimg");
+                            if (!img) return null;
+                            var canvas = document.createElement("canvas");
+                            canvas.width = img.naturalWidth || img.width;
+                            canvas.height = img.naturalHeight || img.height;
+                            var ctx = canvas.getContext("2d");
+                            ctx.drawImage(img, 0, 0);
+                            return canvas.toDataURL("image/png").split(",")[1];
+                        }''')
+                        if b64_data:
+                            import base64
+                            raw = base64.b64decode(b64_data)
                             code = self.captcha.solve_from_bytes(raw)
-                            logger.info(f"下载图片识别验证码: {code}")
-                    except Exception as dl_err:
-                        logger.warning(f"下载验证码图片失败: {dl_err}")
-
-                # 备选：用Playwright截图
-                if not code:
-                    try:
-                        img_bytes = page.locator('img#vimg').screenshot(timeout=10000)
-                        code = self.captcha.solve_from_bytes(img_bytes)
-                        logger.info(f"截图识别验证码: {code}")
-                    except Exception as ss_err:
-                        logger.warning(f"截图方式失败: {ss_err}")
+                            logger.info(f"JS canvas识别验证码: {code}")
+                    except Exception as js_err:
+                        logger.warning(f"JS canvas方式也失败: {js_err}")
 
                 if not code or len(code) < 3:
                     logger.warning(f"验证码识别异常: {code}，刷新重试")
@@ -162,10 +160,44 @@ class AnnualReportBot:
             time.sleep(3)
             logger.info(f"当前页面URL: {change_page.url}")
 
+            # 检查是否有iframe
+            iframe_count = change_page.evaluate('document.querySelectorAll("iframe").length')
+            logger.info(f"页面iframe数量: {iframe_count}")
+
+            form_context = change_page  # 默认用页面本身
+            if iframe_count > 0:
+                # 获取iframe信息
+                iframe_info = change_page.evaluate('''() => {
+                    var iframes = document.querySelectorAll("iframe");
+                    var result = [];
+                    for (var i = 0; i < iframes.length; i++) {
+                        result.push({id: iframes[i].id, name: iframes[i].name, src: iframes[i].src});
+                    }
+                    return result;
+                }''')
+                logger.info(f"iframe信息: {iframe_info}")
+
+                # 尝试切换到第一个有内容的iframe
+                frames = change_page.frames
+                for frame in frames:
+                    if frame != change_page.main_frame:
+                        # 检查这个frame里是否有表单元素
+                        try:
+                            has_form = frame.evaluate('!!document.querySelector("input#regNo") || !!document.querySelector("input[name=\\"regNo\\"]")')
+                            if has_form:
+                                form_context = frame
+                                logger.info(f"找到表单所在iframe: {frame.url}")
+                                break
+                        except:
+                            pass
+
+                if form_context == change_page:
+                    logger.warning("未在iframe中找到表单，继续在主页面操作")
+
             # 等待表单元素加载完成
             logger.info("等待表单加载...")
             try:
-                change_page.wait_for_selector('input#regNo', timeout=15000)
+                form_context.wait_for_selector('input#regNo', timeout=15000)
                 logger.info("表单已加载")
             except Exception:
                 logger.warning("等待表单超时，等5秒再试")
@@ -194,40 +226,40 @@ class AnnualReportBot:
                 selector = f'input[name="{field_name}"]'
                 # 先检查元素是否存在（不要求可见）
                 try:
-                    change_page.wait_for_selector(selector, timeout=5000, state="attached")
+                    form_context.wait_for_selector(selector, timeout=5000, state="attached")
                 except Exception:
                     logger.warning(f"元素不存在: {field_label} ({field_name})")
                     continue
                 # 检查元素是否可见
-                is_visible = change_page.locator(selector).is_visible()
+                is_visible = form_context.locator(selector).is_visible()
                 if is_visible:
                     # 可见元素：点击+键盘输入
                     try:
-                        change_page.click(selector)
+                        form_context.click(selector)
                         time.sleep(0.3)
-                        change_page.fill(selector, "")
-                        change_page.type(selector, field_value, delay=50)
+                        form_context.fill(selector, "")
+                        form_context.type(selector, field_value, delay=50)
                         time.sleep(0.5)
-                        actual = change_page.input_value(selector)
+                        actual = form_context.input_value(selector)
                         if actual == field_value:
                             logger.info(f"填入成功(键盘): {field_label} = {field_value[:6]}...")
                         else:
                             raise Exception("值不一致")
                     except Exception:
                         # 键盘方式失败，用JS
-                        change_page.evaluate(f'''() => {{
+                        form_context.evaluate(f'''() => {{
                             var el = document.querySelector('input[name="{field_name}"]');
                             if(el) {{ el.value = "{field_value}"; el.dispatchEvent(new Event("input",{{bubbles:true}})); el.dispatchEvent(new Event("change",{{bubbles:true}})); }}
                         }}''')
                         logger.info(f"填入成功(JS-可见): {field_label} = {field_value[:6]}...")
                 else:
                     # 隐藏元素：直接用JS设值
-                    change_page.evaluate(f'''() => {{
+                    form_context.evaluate(f'''() => {{
                         var el = document.querySelector('input[name="{field_name}"]');
                         if(el) {{ el.value = "{field_value}"; el.dispatchEvent(new Event("input",{{bubbles:true}})); el.dispatchEvent(new Event("change",{{bubbles:true}})); }}
                     }}''')
                     # 验证
-                    actual = change_page.evaluate(f'''() => {{
+                    actual = form_context.evaluate(f'''() => {{
                         var el = document.querySelector('input[name="{field_name}"]');
                         return el ? el.value : "NOT_FOUND";
                     }}''')
@@ -241,13 +273,13 @@ class AnnualReportBot:
             logger.info("选择联络员证件类型: 中华人民共和国居民身份证")
             # 先用Playwright原生select_option
             try:
-                change_page.select_option('select#cerIdType_xin', value="1")
-                selected = change_page.input_value('select#cerIdType_xin')
+                form_context.select_option('select#cerIdType_xin', value="1")
+                selected = form_context.input_value('select#cerIdType_xin')
                 logger.info(f"下拉框Playwright选择结果: value={selected}")
             except Exception as e:
                 logger.warning(f"Playwright select_option失败: {e}，用JS方式")
             # 不管上面是否成功，都用JS再设置一次确保生效
-            select_result = change_page.evaluate('''() => {
+            select_result = form_context.evaluate('''() => {
                 var sel = document.getElementById("cerIdType_xin");
                 if (!sel) {
                     var selects = document.querySelectorAll("select");
@@ -269,7 +301,7 @@ class AnnualReportBot:
 
             # ---- 图形验证码 ----
             if not self.solve_captcha_with_retry(
-                change_page,
+                form_context,
                 'img#vimg',
                 'input#verifyCodetw'
             ):
@@ -279,12 +311,12 @@ class AnnualReportBot:
             logger.info("点击获取验证码按钮")
             # 按钮是 a#butn 里面套了 <img>，直接用JS调用 onclick 函数最可靠
             try:
-                change_page.evaluate('getCode2()')
+                form_context.evaluate('getCode2()')
                 logger.info("获取验证码: JS getCode2() 调用成功")
             except Exception as e1:
                 logger.warning(f"JS getCode2() 失败: {e1}，尝试点击按钮")
                 try:
-                    change_page.evaluate('document.getElementById("butn").click()')
+                    form_context.evaluate('document.getElementById("butn").click()')
                     logger.info("获取验证码: JS click butn 成功")
                 except Exception as e2:
                     logger.error(f"获取验证码按钮全部失败: {e2}")
@@ -299,14 +331,14 @@ class AnnualReportBot:
                 return False
 
             # 用JS填入短信验证码
-            change_page.evaluate(f'''() => {{
+            form_context.evaluate(f'''() => {{
                 var el = document.getElementById("verifyCode");
                 if (el) {{ el.focus(); el.value = "{sms_code}"; el.dispatchEvent(new Event("input", {{bubbles:true}})); }}
             }}''')
 
             # ---- 提交 ----
             logger.info("点击保存按钮")
-            change_page.click('input[value="保 存"]')
+            form_context.click('input[value="保 存"]')
             time.sleep(3)
 
             self.take_screenshot(change_page, f"change_liaison_{reg_no}")

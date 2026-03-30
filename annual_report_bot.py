@@ -66,9 +66,27 @@ class AnnualReportBot:
                     time.sleep(1)
                     continue
                 
-                # 填入验证码
-                page.fill(captcha_input_selector, code)
-                logger.info(f"验证码已填入: {code} (第{attempt+1}次)")
+                # 填入验证码（先用Playwright fill，失败则用JS）
+                try:
+                    page.fill(captcha_input_selector, code)
+                    logger.info(f"验证码已填入(fill): {code} (第{attempt+1}次)")
+                except Exception as fill_err:
+                    logger.warning(f"fill方式失败: {fill_err}，尝试JS方式")
+                    page.evaluate(f'''() => {{
+                        const el = document.querySelector('{captcha_input_selector}');
+                        if (el) {{
+                            el.value = "{code}";
+                            el.dispatchEvent(new Event("input", {{bubbles: true}}));
+                            el.dispatchEvent(new Event("change", {{bubbles: true}}));
+                        }}
+                    }}''')
+                    logger.info(f"验证码已填入(JS): {code} (第{attempt+1}次)")
+                # 验证是否真的填入了
+                actual = page.evaluate(f'''() => {{
+                    const el = document.querySelector('{captcha_input_selector}');
+                    return el ? el.value : "NOT_FOUND";
+                }}''')
+                logger.info(f"验证码输入框实际值: {actual}")
                 return True
                 
             except Exception as e:
@@ -177,24 +195,40 @@ class AnnualReportBot:
 
             # 联络员证件类型（下拉选择：中华人民共和国居民身份证）
             logger.info("选择联络员证件类型: 中华人民共和国居民身份证")
-            # 先用JS设置值（最可靠），再用Playwright触发
-            change_page.evaluate('''() => {
+            # 先列出所有选项供调试
+            options_info = change_page.evaluate('''() => {
                 const sel = document.querySelector('select[name="certIdType_xin"]') || document.querySelector('#certIdType_xin');
-                if (sel) {
-                    for (let i = 0; i < sel.options.length; i++) {
-                        if (sel.options[i].text.indexOf("居民身份证") >= 0) {
-                            sel.selectedIndex = i;
-                            sel.dispatchEvent(new Event("change", {bubbles: true}));
-                            break;
-                        }
-                    }
+                if (!sel) return "下拉框未找到";
+                const opts = [];
+                for (let i = 0; i < sel.options.length; i++) {
+                    opts.push({index: i, value: sel.options[i].value, text: sel.options[i].text});
                 }
+                return JSON.stringify(opts);
             }''')
+            logger.info(f"下拉框所有选项: {options_info}")
+
+            # 尝试多种方式选择
+            # 方式1：Playwright select_option
+            try:
+                change_page.select_option('select[name="certIdType_xin"]', value="1")
+                logger.info("select_option(value=1) 成功")
+            except Exception as e1:
+                logger.warning(f"select_option失败: {e1}")
+                # 方式2：JS直接设值
+                change_page.evaluate('''() => {
+                    const sel = document.querySelector('select[name="certIdType_xin"]') || document.querySelector('#certIdType_xin');
+                    if (sel) {
+                        sel.value = "1";
+                        sel.dispatchEvent(new Event("change", {bubbles: true}));
+                    }
+                }''')
+                logger.info("JS方式设置下拉框值")
+
             time.sleep(0.5)
             # 验证选择结果
             selected = change_page.evaluate('''() => {
                 const sel = document.querySelector('select[name="certIdType_xin"]') || document.querySelector('#certIdType_xin');
-                return sel ? sel.options[sel.selectedIndex].text : "未找到";
+                return sel ? {value: sel.value, text: sel.options[sel.selectedIndex].text} : "未找到";
             }''')
             logger.info(f"证件类型已选择: {selected}")
             time.sleep(0.5)

@@ -191,32 +191,50 @@ class AnnualReportBot:
                 if not field_value:
                     logger.warning(f"字段为空，跳过: {field_label}")
                     continue
-                # 先用Playwright的type()模拟键盘输入
+                selector = f'input[name="{field_name}"]'
+                # 先检查元素是否存在（不要求可见）
                 try:
-                    selector = f'input[name="{field_name}"]'
-                    change_page.wait_for_selector(selector, timeout=5000, state="visible")
-                    change_page.click(selector)
-                    time.sleep(0.3)
-                    change_page.fill(selector, "")  # 先清空
-                    change_page.type(selector, field_value, delay=50)  # 逐字输入
-                    time.sleep(0.5)
-                    # 验证填入结果
-                    actual = change_page.input_value(selector)
-                    if actual == field_value:
-                        logger.info(f"填入成功: {field_label} = {field_value[:6]}...")
-                    else:
-                        logger.warning(f"填入值不一致: {field_label} 期望={field_value[:6]} 实际={actual[:6]}")
-                        # JS备选
+                    change_page.wait_for_selector(selector, timeout=5000, state="attached")
+                except Exception:
+                    logger.warning(f"元素不存在: {field_label} ({field_name})")
+                    continue
+                # 检查元素是否可见
+                is_visible = change_page.locator(selector).is_visible()
+                if is_visible:
+                    # 可见元素：点击+键盘输入
+                    try:
+                        change_page.click(selector)
+                        time.sleep(0.3)
+                        change_page.fill(selector, "")
+                        change_page.type(selector, field_value, delay=50)
+                        time.sleep(0.5)
+                        actual = change_page.input_value(selector)
+                        if actual == field_value:
+                            logger.info(f"填入成功(键盘): {field_label} = {field_value[:6]}...")
+                        else:
+                            raise Exception("值不一致")
+                    except Exception:
+                        # 键盘方式失败，用JS
                         change_page.evaluate(f'''() => {{
                             var el = document.querySelector('input[name="{field_name}"]');
                             if(el) {{ el.value = "{field_value}"; el.dispatchEvent(new Event("input",{{bubbles:true}})); el.dispatchEvent(new Event("change",{{bubbles:true}})); }}
                         }}''')
-                except Exception as e:
-                    logger.warning(f"Playwright填入失败({field_label}): {e}，用JS方式")
+                        logger.info(f"填入成功(JS-可见): {field_label} = {field_value[:6]}...")
+                else:
+                    # 隐藏元素：直接用JS设值
                     change_page.evaluate(f'''() => {{
                         var el = document.querySelector('input[name="{field_name}"]');
-                        if(el) {{ el.focus(); el.value = "{field_value}"; el.dispatchEvent(new Event("input",{{bubbles:true}})); el.dispatchEvent(new Event("change",{{bubbles:true}})); }}
+                        if(el) {{ el.value = "{field_value}"; el.dispatchEvent(new Event("input",{{bubbles:true}})); el.dispatchEvent(new Event("change",{{bubbles:true}})); }}
                     }}''')
+                    # 验证
+                    actual = change_page.evaluate(f'''() => {{
+                        var el = document.querySelector('input[name="{field_name}"]');
+                        return el ? el.value : "NOT_FOUND";
+                    }}''')
+                    if actual == field_value:
+                        logger.info(f"填入成功(JS-隐藏): {field_label} = {field_value[:6]}...")
+                    else:
+                        logger.warning(f"JS填入可能失败: {field_label} 期望={field_value[:6]} 实际={actual[:6] if actual else 'empty'}")
                 time.sleep(0.5)
 
             # ---- 下拉框：选择中华人民共和国居民身份证 ----

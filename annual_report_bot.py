@@ -96,13 +96,19 @@ class AnnualReportBot:
         logger.info(f"开始联络员变更: {enterprise.get('企业名称', '')} ({reg_no})")
 
         try:
-            # 打开联络员变更页面
-            page.goto(config.CHANGE_LIAISON_URL, wait_until="networkidle")
+            # 先打开登录页面
+            page.goto(config.LOGIN_URL, wait_until="domcontentloaded")
+            time.sleep(3)
+
+            # 点击页面底部的【联络员变更】链接
+            page.click('a:has-text("联络员变更")')
+            time.sleep(3)
+
+            # 等待联络员变更页面加载
+            page.wait_for_load_state("domcontentloaded")
             time.sleep(2)
 
             # ---- 填写表单 ----
-            # 注意：以下选择器需要根据实际页面HTML调整
-
             # 统一社会信用代码/注册号
             page.fill('input[name="regno"]', reg_no)
 
@@ -114,14 +120,14 @@ class AnnualReportBot:
 
             # ---- 新联络员信息 ----
             page.fill('input[name="newLiaisonName"]', config.NEW_LIAISON["name"])
-            
+
             # 联络员证件类型（下拉选择）
-            page.select_option('select[name="newLiaisonCertype"]', 
+            page.select_option('select[name="newLiaisonCertype"]',
                              label=config.NEW_LIAISON["id_type"])
-            
+
             # 新联络员证件号码
             page.fill('input[name="newLiaisonCerno"]', config.NEW_LIAISON["id_number"])
-            
+
             # 新联络员手机号码
             page.fill('input[name="newLiaisonPhone"]', config.NEW_LIAISON["phone"])
             
@@ -184,9 +190,9 @@ class AnnualReportBot:
         logger.info(f"开始登录: {reg_no}")
         
         try:
-            page.goto(config.LOGIN_URL, wait_until="networkidle")
-            time.sleep(2)
-            
+            page.goto(config.LOGIN_URL, wait_until="domcontentloaded")
+            time.sleep(3)
+
             # 填入注册号
             page.fill('input[name="regno"]', reg_no)
             
@@ -387,6 +393,7 @@ class AnnualReportBot:
         
         with sync_playwright() as p:
             browser = p.chromium.launch(
+                channel="msedge",
                 headless=config.HEADLESS,
                 slow_mo=config.SLOW_MO,
             )

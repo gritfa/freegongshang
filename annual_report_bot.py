@@ -43,36 +43,46 @@ class AnnualReportBot:
     def solve_captcha_with_retry(self, page: Page, captcha_img_selector: str,
                                   captcha_input_selector: str) -> bool:
         """识别并填写图形验证码，支持重试"""
-        import base64
+        import urllib.request
         for attempt in range(config.CAPTCHA_MAX_RETRY):
             try:
                 page.wait_for_selector(captcha_img_selector, timeout=10000)
                 time.sleep(1)
 
-                # 优先用JS canvas方式获取验证码图片（避免screenshot超时）
+                # 方法1：获取验证码图片的src，用Python直接下载（避免跨域问题）
                 code = None
-                img_b64 = page.evaluate('''(selector) => {
+                img_src = page.evaluate('''(selector) => {
                     const img = document.querySelector(selector);
-                    if (!img) return null;
-                    // 等图片加载完
-                    if (!img.complete || img.naturalWidth === 0) return null;
-                    const canvas = document.createElement('canvas');
-                    canvas.width = img.naturalWidth || img.width || 110;
-                    canvas.height = img.naturalHeight || img.height || 35;
-                    const ctx = canvas.getContext('2d');
-                    ctx.drawImage(img, 0, 0);
-                    return canvas.toDataURL('image/png').split(',')[1];
+                    return img ? img.src : null;
                 }''', captcha_img_selector)
 
-                if img_b64:
-                    raw = base64.b64decode(img_b64)
-                    code = self.captcha.solve_from_bytes(raw)
-                    logger.info(f"JS canvas识别验证码: {code}")
-                else:
-                    # JS canvas失败，尝试直接截图
-                    logger.warning("JS canvas获取失败，尝试截图方式")
+                if img_src:
+                    logger.info(f"验证码图片地址: {img_src}")
+                    # 获取页面的cookies，带上cookies去下载图片
+                    cookies = page.context.cookies()
+                    cookie_str = "; ".join([f"{c['name']}={c['value']}" for c in cookies])
+
+                    req = urllib.request.Request(img_src)
+                    req.add_header("Cookie", cookie_str)
+                    req.add_header("Referer", page.url)
+                    req.add_header("User-Agent", "Mozilla/5.0")
+                    with urllib.request.urlopen(req, timeout=10) as resp:
+                        raw = resp.read()
+
+                    if raw and len(raw) > 100:
+                        code = self.captcha.solve_from_bytes(raw)
+                        logger.info(f"下载图片识别验证码: {code}")
+                    else:
+                        logger.warning(f"下载的图片数据太小: {len(raw)} bytes")
+
+                # 方法2：如果下载失败，尝试截图方式
+                if not code:
+                    logger.warning("下载方式失败，尝试截图方式")
                     try:
-                        code = self.captcha.solve_from_element(page, captcha_img_selector)
+                        element = page.locator(captcha_img_selector)
+                        img_bytes = element.screenshot(timeout=15000)
+                        code = self.captcha.solve_from_bytes(img_bytes)
+                        logger.info(f"截图识别验证码: {code}")
                     except Exception as e2:
                         logger.error(f"截图方式也失败: {e2}")
 
@@ -82,30 +92,25 @@ class AnnualReportBot:
                     time.sleep(1)
                     continue
 
-                # 用JS方式填入验证码（最可靠）
-                page.evaluate('''(args) => {
-                    const el = document.querySelector(args.selector);
-                    if (el) {
-                        el.focus();
-                        el.value = args.code;
-                        el.dispatchEvent(new Event("input", {bubbles: true}));
-                        el.dispatchEvent(new Event("change", {bubbles: true}));
-                    }
-                }''', {"selector": captcha_input_selector, "code": code})
+                # 填入验证码：先清空再输入
+                page.click(captcha_input_selector)
+                page.fill(captcha_input_selector, "")
+                page.fill(captcha_input_selector, code)
                 time.sleep(0.3)
 
                 # 验证填入结果
-                actual = page.evaluate('''(selector) => {
-                    const el = document.querySelector(selector);
-                    return el ? el.value : "NOT_FOUND";
-                }''', captcha_input_selector)
+                actual = page.input_value(captcha_input_selector)
                 logger.info(f"验证码已填入: {code}, 输入框实际值: {actual} (第{attempt+1}次)")
 
                 if actual == code:
                     return True
                 else:
-                    logger.warning(f"验证码填入不一致，重试")
-                    continue
+                    logger.warning(f"验证码填入不一致，尝试JS方式填入")
+                    page.evaluate('''(args) => {
+                        var el = document.getElementById(args.id);
+                        if (el) { el.value = args.code; }
+                    }''', {"id": "verifyCodetw", "code": code})
+                    return True
 
             except Exception as e:
                 logger.error(f"验证码处理失败(第{attempt+1}次): {e}")
@@ -114,56 +119,10 @@ class AnnualReportBot:
         logger.error("验证码多次识别失败")
         return False
     
-    def _find_captcha_img(self, page: Page) -> str:
-        """尝试多种选择器找到验证码图片"""
-        selectors = [
-            'img#vimg',
-            'img[name="验证码"]',
-            'img[id="vimg"]',
-            'img#vImg',
-            'img[name="vImg"]',
-            'img.verifyImg',
-            'img[src*="captcha"]',
-            'img[src*="verify"]',
-            'img[src*="vImg"]',
-            'img[src*="code"]',
-        ]
-        for sel in selectors:
-            try:
-                if page.locator(sel).count() > 0:
-                    logger.info(f"找到验证码图片: {sel}")
-                    return sel
-            except Exception:
-                continue
-        # 最后尝试用JS找所有img标签
-        try:
-            result = page.evaluate('''() => {
-                const imgs = document.querySelectorAll('img');
-                const info = [];
-                for (const img of imgs) {
-                    info.push({id: img.id, name: img.name, src: img.src.substring(0,80), className: img.className});
-                }
-                return info;
-            }''')
-            logger.info(f"页面上所有img标签: {result}")
-        except Exception:
-            pass
-        return ""
-
     # ==================== 联络员变更 ====================
     
     def change_liaison(self, page: Page, enterprise: dict) -> bool:
-        """执行联络员变更
-
-        Args:
-            page: 页面对象
-            enterprise: 企业信息字典，包含：
-                - 注册号/统一社会信用代码
-                - 法定代表人
-                - 身份证
-        Returns:
-            变更是否成功
-        """
+        """执行联络员变更"""
         reg_no = enterprise.get("注册号/统一社会信用代码", enterprise.get("注册号", ""))
         logger.info(f"开始联络员变更: {enterprise.get('企业名称', '')} ({reg_no})")
 
@@ -172,19 +131,21 @@ class AnnualReportBot:
             page.goto(config.LOGIN_URL, wait_until="domcontentloaded")
             time.sleep(3)
 
-            # 点击【联络员变更】链接，可能打开新标签页
-            with page.context.expect_page() as new_page_info:
-                page.click('a:has-text("联络员变更")')
+            # 记录当前页面数量，用于检测是否打开了新标签页
+            pages_before = len(page.context.pages)
 
-            # 如果打开了新标签页，切换到新页面
-            try:
-                change_page = new_page_info.value
+            # 点击【联络员变更】链接
+            page.click('a:has-text("联络员变更")')
+            time.sleep(3)
+
+            # 检查是否打开了新标签页
+            all_pages = page.context.pages
+            if len(all_pages) > pages_before:
+                change_page = all_pages[-1]
                 change_page.wait_for_load_state("domcontentloaded")
                 logger.info("联络员变更在新标签页打开")
-            except Exception:
-                # 没有新标签页，说明是在当前页面跳转
+            else:
                 change_page = page
-                time.sleep(3)
                 change_page.wait_for_load_state("domcontentloaded")
                 logger.info("联络员变更在当前页面跳转")
 
@@ -192,16 +153,17 @@ class AnnualReportBot:
             logger.info(f"当前页面URL: {change_page.url}")
 
             # ---- 填写表单 ----
-            # 统一社会信用代码/注册号
+            logger.info(f"填入注册号: {reg_no}")
             change_page.fill('input#regNo', reg_no)
+            time.sleep(0.5)
 
-            # 法定代表人姓名
             logger.info(f"填入法定代表人: {enterprise.get('法定代表人', '')}")
             change_page.fill('input[name="leRep"]', enterprise.get("法定代表人", ""))
+            time.sleep(0.3)
 
-            # 法定代表人证件号码
             logger.info(f"填入法定代表人证件号: {enterprise.get('身份证', '')[:4]}****")
             change_page.fill('input[name="certId"]', enterprise.get("身份证", ""))
+            time.sleep(0.3)
 
             # ---- 新联络员信息（从Excel读取）----
             new_name = enterprise.get("新联络员姓名", "")
@@ -210,37 +172,45 @@ class AnnualReportBot:
 
             logger.info(f"填入新联络员姓名: {new_name}")
             change_page.fill('input[name="liaName_xin"]', new_name)
+            time.sleep(0.3)
 
-            # 联络员证件类型（下拉选择：中华人民共和国居民身份证）
-            # 确切选择器：id="cerIdType_xin" name="cerIdType_xin"，value="1"=居民身份证
-            logger.info("选择联络员证件类型: 中华人民共和国居民身份证")
-            try:
-                change_page.select_option('select#cerIdType_xin', value="1")
-                logger.info("下拉框选择成功: value=1 居民身份证")
-            except Exception as e:
-                logger.warning(f"select_option失败: {e}，尝试JS方式")
+            # ---- 下拉框：选择中华人民共和国居民身份证 ----
+            # 确切选择器：select#cerIdType_xin，value="1"=居民身份证
+            logger.info("选择联络员证件类型: 中华人民共和国居民身份证 (value=1)")
+            # 先点击下拉框激活它
+            change_page.click('select#cerIdType_xin')
+            time.sleep(0.5)
+            # 用Playwright的select_option
+            change_page.select_option('select#cerIdType_xin', value="1")
+            time.sleep(0.5)
+            # 验证选择结果
+            selected = change_page.evaluate('document.getElementById("cerIdType_xin").value')
+            logger.info(f"下拉框当前值: {selected}")
+            if selected != "1":
+                logger.warning(f"select_option后值不对({selected})，用JS强制设置")
                 change_page.evaluate('''() => {
                     var sel = document.getElementById("cerIdType_xin");
-                    if (sel) {
-                        sel.value = "1";
-                        sel.dispatchEvent(new Event("change", {bubbles: true}));
-                    }
+                    sel.selectedIndex = 1;
+                    sel.value = "1";
+                    sel.dispatchEvent(new Event("change", {bubbles: true}));
                 }''')
-                logger.info("JS方式选择完成")
-            time.sleep(0.5)
+                time.sleep(0.3)
+                selected2 = change_page.evaluate('document.getElementById("cerIdType_xin").value')
+                logger.info(f"JS设置后下拉框值: {selected2}")
 
             # 新联络员证件号码
             logger.info(f"填入新联络员证件号: {new_id[:4]}****")
             change_page.fill('input[name="certId_xin"]', new_id)
+            time.sleep(0.3)
 
             # 新联络员手机号码
             logger.info(f"填入新联络员手机号: {new_phone[:3]}****{new_phone[-3:]}")
             change_page.fill('input[name="mobileTel_xin"]', new_phone)
+            time.sleep(0.3)
 
             logger.info("表单数据填入完成，开始处理验证码")
 
             # ---- 图形验证码 ----
-            # 确切选择器：img#vimg（全小写），输入框：input#verifyCodetw
             if not self.solve_captcha_with_retry(
                 change_page,
                 'img#vimg',
@@ -249,11 +219,10 @@ class AnnualReportBot:
                 return False
 
             # ---- 短信验证码 ----
-            # 点击获取验证码按钮
-            change_page.click('input[value="获取验证码"], button:has-text("获取验证码")')
+            logger.info("点击获取验证码按钮")
+            change_page.click('input[value="获取验证码"]')
             time.sleep(1)
 
-            # 等待人工输入短信验证码
             sms_code = self.sms.wait_for_sms_code(
                 new_phone,
                 purpose=f"联络员变更-{enterprise.get('企业名称', '')}"
@@ -262,19 +231,17 @@ class AnnualReportBot:
                 logger.error("未获取到短信验证码")
                 return False
 
-            change_page.fill('input[name="verifyCode"]', sms_code)
+            change_page.fill('input#verifyCode', sms_code)
 
             # ---- 提交 ----
-            change_page.click('input[value="保 存"], button:has-text("保 存")')
+            logger.info("点击保存按钮")
+            change_page.click('input[value="保 存"]')
             time.sleep(3)
 
-            # 判断是否成功
             self.take_screenshot(change_page, f"change_liaison_{reg_no}")
-            
-            # 检查页面是否有成功提示
+
             if change_page.locator('text=成功').count() > 0 or change_page.locator('text=变更成功').count() > 0:
                 logger.info(f"联络员变更成功: {reg_no}")
-                # 如果是新标签页，关闭它
                 if change_page != page:
                     change_page.close()
                 return True
@@ -284,7 +251,7 @@ class AnnualReportBot:
                 if change_page != page:
                     change_page.close()
                 return False
-                
+
         except Exception as e:
             logger.error(f"联络员变更异常: {e}")
             self.take_screenshot(page, f"change_liaison_error_{reg_no}")

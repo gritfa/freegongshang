@@ -44,21 +44,19 @@ class AnnualReportBot:
                                   captcha_input_selector: str) -> bool:
         """识别并填写图形验证码，支持重试"""
         import urllib.request
+        import base64
         for attempt in range(config.CAPTCHA_MAX_RETRY):
             try:
-                page.wait_for_selector(captcha_img_selector, timeout=10000)
+                # 等待验证码图片出现
+                page.wait_for_selector('img#vimg', timeout=10000)
                 time.sleep(1)
 
-                # 方法1：获取验证码图片的src，用Python直接下载（避免跨域问题）
+                # 用JS获取验证码图片src
+                img_src = page.evaluate('() => { var img = document.getElementById("vimg"); return img ? img.src : null; }')
                 code = None
-                img_src = page.evaluate('''(selector) => {
-                    const img = document.querySelector(selector);
-                    return img ? img.src : null;
-                }''', captcha_img_selector)
 
                 if img_src:
                     logger.info(f"验证码图片地址: {img_src}")
-                    # 获取页面的cookies，带上cookies去下载图片
                     cookies = page.context.cookies()
                     cookie_str = "; ".join([f"{c['name']}={c['value']}" for c in cookies])
 
@@ -66,66 +64,63 @@ class AnnualReportBot:
                     req.add_header("Cookie", cookie_str)
                     req.add_header("Referer", page.url)
                     req.add_header("User-Agent", "Mozilla/5.0")
-                    with urllib.request.urlopen(req, timeout=10) as resp:
-                        raw = resp.read()
-
-                    if raw and len(raw) > 100:
-                        code = self.captcha.solve_from_bytes(raw)
-                        logger.info(f"下载图片识别验证码: {code}")
-                    else:
-                        logger.warning(f"下载的图片数据太小: {len(raw)} bytes")
-
-                # 方法2：如果下载失败，尝试截图方式
-                if not code:
-                    logger.warning("下载方式失败，尝试截图方式")
                     try:
-                        element = page.locator(captcha_img_selector)
-                        img_bytes = element.screenshot(timeout=15000)
+                        with urllib.request.urlopen(req, timeout=10) as resp:
+                            raw = resp.read()
+                        if raw and len(raw) > 100:
+                            code = self.captcha.solve_from_bytes(raw)
+                            logger.info(f"下载图片识别验证码: {code}")
+                    except Exception as dl_err:
+                        logger.warning(f"下载验证码图片失败: {dl_err}")
+
+                # 备选：用Playwright截图
+                if not code:
+                    try:
+                        img_bytes = page.locator('img#vimg').screenshot(timeout=10000)
                         code = self.captcha.solve_from_bytes(img_bytes)
                         logger.info(f"截图识别验证码: {code}")
-                    except Exception as e2:
-                        logger.error(f"截图方式也失败: {e2}")
+                    except Exception as ss_err:
+                        logger.warning(f"截图方式失败: {ss_err}")
 
                 if not code or len(code) < 3:
-                    logger.warning(f"验证码识别结果异常: {code}，点击刷新重试")
-                    page.click(captcha_img_selector)
+                    logger.warning(f"验证码识别异常: {code}，刷新重试")
+                    page.evaluate('() => { var img = document.getElementById("vimg"); if(img) img.click(); }')
                     time.sleep(1)
                     continue
 
-                # 填入验证码：三种方式依次尝试
-                # 方式1：点击输入框，清空，逐字输入（模拟真实键盘）
-                inp = page.locator(captcha_input_selector)
-                inp.click()
-                time.sleep(0.2)
-                page.keyboard.press("Control+a")
-                page.keyboard.press("Delete")
-                time.sleep(0.1)
-                inp.type(code, delay=50)
-                time.sleep(0.3)
-
-                # 验证填入结果
-                actual = page.input_value(captcha_input_selector)
-                logger.info(f"验证码type填入: {code}, 实际值: {actual} (第{attempt+1}次)")
-
-                if actual == code:
-                    return True
-
-                # 方式2：JS直接设置value
-                logger.warning(f"type方式填入不一致({actual})，尝试JS方式")
-                page.evaluate(f'''() => {{
-                    var el = document.querySelector('{captcha_input_selector}');
-                    if (!el) el = document.getElementById('verifyCodetw');
-                    if (el) {{
+                # 用JS直接填入验证码输入框（最可靠的方式）
+                fill_result = page.evaluate('''(code) => {
+                    var el = document.getElementById("verifyCodetw");
+                    if (!el) {
+                        // 备选：按name查找
+                        var inputs = document.querySelectorAll("input");
+                        for (var i = 0; i < inputs.length; i++) {
+                            if (inputs[i].name && inputs[i].name.toLowerCase().indexOf("verifycode") >= 0
+                                && inputs[i].name.toLowerCase().indexOf("tw") >= 0) {
+                                el = inputs[i];
+                                break;
+                            }
+                        }
+                    }
+                    if (el) {
                         el.focus();
-                        el.value = '{code}';
-                        el.dispatchEvent(new Event('input', {{bubbles:true}}));
-                        el.dispatchEvent(new Event('change', {{bubbles:true}}));
-                    }}
-                }}''')
-                time.sleep(0.3)
-                actual2 = page.input_value(captcha_input_selector)
-                logger.info(f"JS填入后实际值: {actual2}")
-                return True
+                        el.value = code;
+                        el.dispatchEvent(new Event("input", {bubbles: true}));
+                        el.dispatchEvent(new Event("change", {bubbles: true}));
+                        return el.value;
+                    }
+                    return "NOT_FOUND";
+                }''', code)
+
+                logger.info(f"验证码填入结果: 识别={code}, 填入后={fill_result} (第{attempt+1}次)")
+
+                if fill_result == code:
+                    return True
+                elif fill_result == "NOT_FOUND":
+                    logger.error("验证码输入框未找到！")
+                else:
+                    logger.warning(f"填入值不一致: {fill_result}")
+                    return True  # 值已设置，继续流程
 
             except Exception as e:
                 logger.error(f"验证码处理失败(第{attempt+1}次): {e}")
@@ -189,29 +184,38 @@ class AnnualReportBot:
             change_page.fill('input[name="liaName_xin"]', new_name)
             time.sleep(0.3)
 
-            # ---- 下拉框：选择中华人民共和国居民身份证 ----
+            # ---- 下拉框：选择中华人民共和国居民身份证（全部用JS操作）----
             logger.info("选择联络员证件类型: 中华人民共和国居民身份证")
-            dropdown = change_page.locator('select#cerIdType_xin')
-            dropdown.scroll_into_view_if_needed()
-            time.sleep(0.3)
-            # 用select_option直接选value="1"
-            dropdown.select_option(value="1")
-            time.sleep(0.5)
-            # 验证
-            selected = change_page.evaluate('document.getElementById("cerIdType_xin").value')
-            logger.info(f"下拉框选择后值: {selected}")
-            if selected != "1":
-                # 备选：用键盘操作选择
-                logger.warning(f"select_option失败({selected})，改用键盘方式")
-                dropdown.click()
-                time.sleep(0.3)
-                # 按下箭头选第一个选项（跳过"请选择"）
-                change_page.keyboard.press("ArrowDown")
-                time.sleep(0.1)
-                change_page.keyboard.press("Enter")
-                time.sleep(0.3)
-                selected2 = change_page.evaluate('document.getElementById("cerIdType_xin").value')
-                logger.info(f"键盘方式后下拉框值: {selected2}")
+            select_result = change_page.evaluate('''() => {
+                // 按id查找
+                var sel = document.getElementById("cerIdType_xin");
+                // 备选：按name查找（兼容大小写）
+                if (!sel) {
+                    var selects = document.querySelectorAll("select");
+                    for (var i = 0; i < selects.length; i++) {
+                        var n = (selects[i].name || "").toLowerCase();
+                        if (n.indexOf("certid") >= 0 || n.indexOf("cerid") >= 0) {
+                            sel = selects[i];
+                            break;
+                        }
+                    }
+                }
+                if (!sel) return "SELECT_NOT_FOUND";
+                // 遍历选项，找到居民身份证
+                for (var j = 0; j < sel.options.length; j++) {
+                    if (sel.options[j].text.indexOf("居民身份证") >= 0) {
+                        sel.selectedIndex = j;
+                        sel.value = sel.options[j].value;
+                        sel.dispatchEvent(new Event("change", {bubbles: true}));
+                        return "OK:" + sel.options[j].text;
+                    }
+                }
+                // 如果没找到文字匹配，直接选value="1"
+                sel.value = "1";
+                sel.dispatchEvent(new Event("change", {bubbles: true}));
+                return "FALLBACK:" + sel.value;
+            }''')
+            logger.info(f"下拉框选择结果: {select_result}")
 
             # 新联络员证件号码
             logger.info(f"填入新联络员证件号: {new_id[:4]}****")
@@ -246,7 +250,11 @@ class AnnualReportBot:
                 logger.error("未获取到短信验证码")
                 return False
 
-            change_page.fill('input#verifyCode', sms_code)
+            # 用JS填入短信验证码
+            change_page.evaluate(f'''() => {{
+                var el = document.getElementById("verifyCode");
+                if (el) {{ el.focus(); el.value = "{sms_code}"; el.dispatchEvent(new Event("input", {{bubbles:true}})); }}
+            }}''')
 
             # ---- 提交 ----
             logger.info("点击保存按钮")
@@ -316,7 +324,12 @@ class AnnualReportBot:
             if not sms_code:
                 return False
 
-            page.fill('input[name="verifyCode"]', sms_code)
+            # 用JS填入短信验证码
+            page.evaluate(f'''() => {{
+                var el = document.getElementById("verifyCode");
+                if (!el) {{ var inputs = document.querySelectorAll("input"); for (var i=0;i<inputs.length;i++) {{ if(inputs[i].name=="verifyCode") {{ el=inputs[i]; break; }} }} }}
+                if (el) {{ el.focus(); el.value = "{sms_code}"; el.dispatchEvent(new Event("input", {{bubbles:true}})); }}
+            }}''')
 
             # 点击登录
             page.click('input[value="登录"], button:has-text("登录")')

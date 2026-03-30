@@ -159,21 +159,32 @@ class AnnualReportBot:
                 change_page.wait_for_load_state("domcontentloaded")
                 logger.info("联络员变更在当前页面跳转")
 
-            time.sleep(2)
+            time.sleep(3)
             logger.info(f"当前页面URL: {change_page.url}")
+
+            # 等待表单元素加载完成
+            logger.info("等待表单加载...")
+            try:
+                change_page.wait_for_selector('input#regNo', timeout=15000)
+                logger.info("表单已加载")
+            except Exception:
+                logger.warning("等待表单超时，等5秒再试")
+                time.sleep(5)
+
+            time.sleep(2)
 
             # ---- 填写表单 ----
             logger.info(f"填入注册号: {reg_no}")
             change_page.fill('input#regNo', reg_no)
-            time.sleep(0.5)
+            time.sleep(1)
 
             logger.info(f"填入法定代表人: {enterprise.get('法定代表人', '')}")
             change_page.fill('input[name="leRep"]', enterprise.get("法定代表人", ""))
-            time.sleep(0.3)
+            time.sleep(1)
 
             logger.info(f"填入法定代表人证件号: {enterprise.get('身份证', '')[:4]}****")
             change_page.fill('input[name="certId"]', enterprise.get("身份证", ""))
-            time.sleep(0.3)
+            time.sleep(1)
 
             # ---- 新联络员信息（从Excel读取）----
             new_name = enterprise.get("新联络员姓名", "")
@@ -182,7 +193,7 @@ class AnnualReportBot:
 
             logger.info(f"填入新联络员姓名: {new_name}")
             change_page.fill('input[name="liaName_xin"]', new_name)
-            time.sleep(0.3)
+            time.sleep(1)
 
             # ---- 下拉框：选择中华人民共和国居民身份证（全部用JS操作）----
             logger.info("选择联络员证件类型: 中华人民共和国居民身份证")
@@ -220,12 +231,12 @@ class AnnualReportBot:
             # 新联络员证件号码
             logger.info(f"填入新联络员证件号: {new_id[:4]}****")
             change_page.fill('input[name="certId_xin"]', new_id)
-            time.sleep(0.3)
+            time.sleep(1)
 
             # 新联络员手机号码
             logger.info(f"填入新联络员手机号: {new_phone[:3]}****{new_phone[-3:]}")
             change_page.fill('input[name="mobileTel_xin"]', new_phone)
-            time.sleep(0.3)
+            time.sleep(1)
 
             logger.info("表单数据填入完成，开始处理验证码")
 

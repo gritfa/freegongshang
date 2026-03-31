@@ -910,15 +910,15 @@ class AnnualReportBot:
             ):
                 return False
 
-            # 点击获取短信验证码 — 直接用JS调用函数
+            # 点击获取短信验证码 — 按钮onclick是hyzm()，name="butn"
             logger.info("登录页: 点击获取验证码")
             try:
-                captcha_page.evaluate('getCode2()')
-                logger.info("登录页获取验证码: JS getCode2() 调用成功")
+                captcha_page.evaluate('hyzm()')
+                logger.info("登录页获取验证码: JS hyzm() 调用成功")
             except Exception as e1:
-                logger.warning(f"登录页JS getCode2() 失败: {e1}，尝试点击按钮")
+                logger.warning(f"登录页JS hyzm() 失败: {e1}，尝试点击按钮")
                 try:
-                    captcha_page.evaluate('document.getElementById("butn").click()')
+                    captcha_page.evaluate('document.getElementsByName("butn")[0].click()')
                     logger.info("登录页获取验证码: JS click butn 成功")
                 except Exception as e2:
                     logger.error(f"登录页获取验证码按钮全部失败: {e2}")

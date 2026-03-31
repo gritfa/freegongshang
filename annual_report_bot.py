@@ -362,9 +362,50 @@ class AnnualReportBot:
                 }}''')
                 logger.info(f"短信验证码JS填入结果: {sms_fill_result}")
 
-            # ---- 提交 ----
+            # ---- 提交保存 ----
             logger.info("点击保存按钮")
-            form_context.click('input[value="保 存"]')
+            save_clicked = False
+            # 尝试多种选择器找保存按钮
+            save_selectors = [
+                'input[value="保 存"]',
+                'input[value="保存"]',
+                'button:has-text("保存")',
+                'button:has-text("保 存")',
+                'a:has-text("保存")',
+                'a:has-text("保 存")',
+                'input[type="button"][value*="保"]',
+                'input[type="submit"][value*="保"]',
+            ]
+            for sel in save_selectors:
+                try:
+                    if form_context.locator(sel).count() > 0:
+                        form_context.click(sel, timeout=5000)
+                        save_clicked = True
+                        logger.info(f"保存按钮点击成功: {sel}")
+                        break
+                except Exception:
+                    continue
+
+            if not save_clicked:
+                # 用JS遍历所有可点击元素找保存按钮
+                logger.info("尝试用JS点击保存按钮")
+                js_result = change_page.evaluate('''() => {
+                    // 查找所有input/button/a元素
+                    var elements = document.querySelectorAll("input, button, a");
+                    for (var i = 0; i < elements.length; i++) {
+                        var el = elements[i];
+                        var text = (el.value || el.textContent || "").trim();
+                        if (text.includes("保") && text.includes("存")) {
+                            el.click();
+                            return "clicked: " + el.tagName + " " + text;
+                        }
+                    }
+                    return "NOT_FOUND";
+                }''')
+                logger.info(f"JS保存按钮结果: {js_result}")
+                if "NOT_FOUND" not in js_result:
+                    save_clicked = True
+
             time.sleep(3)
 
             self.take_screenshot(change_page, f"change_liaison_{reg_no}")

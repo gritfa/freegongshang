@@ -136,13 +136,16 @@ class SmsReceiver:
     def get_latest_code(self, timeout=120):
         """等待并获取最新验证码"""
         start = time.time()
-        # 清除旧的验证码
-        old_time = self.latest_sms.get("_latest", {}).get("time", 0)
+        # 接受最近10秒内收到的验证码（避免因时序问题错过刚到的验证码）
+        recent_threshold = start - 10
 
         while time.time() - start < timeout:
             latest = self.latest_sms.get("_latest", {})
-            if latest.get("time", 0) > old_time and latest.get("code"):
-                return latest["code"]
+            if latest.get("time", 0) > recent_threshold and latest.get("code"):
+                code = latest["code"]
+                # 取完后清除，避免重复使用
+                self.latest_sms.pop("_latest", None)
+                return code
             time.sleep(1)
 
         return None

@@ -430,16 +430,44 @@ class AnnualReportBot:
         logger.info(f"开始登录: {reg_no}")
 
         try:
-            page.goto(config.LOGIN_URL, wait_until="domcontentloaded")
-            time.sleep(3)
+            # 检查当前页面是否已经在登录页
+            current_url = page.url
+            if "liaisonsLogin" not in current_url:
+                logger.info(f"当前不在登录页({current_url})，跳转到登录页")
+                page.goto(config.LOGIN_URL, wait_until="domcontentloaded")
+                time.sleep(3)
+            else:
+                logger.info("已在登录页，直接操作")
+                time.sleep(2)
 
-            # 填入注册号
-            page.fill('input#regNo', reg_no)
+            # 等待注册号输入框出现
+            try:
+                page.wait_for_selector('input#regNo', timeout=15000)
+                logger.info("登录页表单已加载")
+            except Exception:
+                logger.warning("等待登录页表单超时，等3秒再试")
+                time.sleep(3)
+
+            # 填入注册号 — 用type()模拟键盘输入
+            try:
+                page.click('input#regNo')
+                time.sleep(0.3)
+                page.fill('input#regNo', '')
+                page.type('input#regNo', reg_no, delay=50)
+                actual = page.input_value('input#regNo')
+                logger.info(f"注册号填入: 期望={reg_no[:8]}... 实际={actual[:8]}...")
+            except Exception as e:
+                logger.warning(f"注册号type方式失败({e})，用JS填入")
+                page.evaluate(f'''() => {{
+                    var el = document.getElementById("regNo");
+                    if(el) {{ el.value = "{reg_no}"; el.dispatchEvent(new Event("input",{{bubbles:true}})); el.dispatchEvent(new Event("change",{{bubbles:true}})); }}
+                }}''')
+                logger.info(f"注册号JS填入完成: {reg_no[:8]}...")
 
             # 等待页面自动加载联络员信息
-            time.sleep(2)
+            time.sleep(3)
 
-            # 图形验证码 — 确切选择器：img#vimg，输入框：input#verifyCodetw
+            # 图形验证码
             if not self.solve_captcha_with_retry(
                 page,
                 'img#vimg',
@@ -448,6 +476,7 @@ class AnnualReportBot:
                 return False
 
             # 点击获取短信验证码 — 直接用JS调用函数
+            logger.info("登录页: 点击获取验证码")
             try:
                 page.evaluate('getCode2()')
                 logger.info("登录页获取验证码: JS getCode2() 调用成功")
@@ -468,28 +497,103 @@ class AnnualReportBot:
             if not sms_code:
                 return False
 
-            # 用JS填入短信验证码
-            page.evaluate(f'''() => {{
-                var el = document.getElementById("verifyCode");
-                if (!el) {{ var inputs = document.querySelectorAll("input"); for (var i=0;i<inputs.length;i++) {{ if(inputs[i].name=="verifyCode") {{ el=inputs[i]; break; }} }} }}
-                if (el) {{ el.focus(); el.value = "{sms_code}"; el.dispatchEvent(new Event("input", {{bubbles:true}})); }}
-            }}''')
+            # 填入短信验证码 — 先用type()，失败用JS
+            logger.info(f"登录页: 准备填入短信验证码: {sms_code}")
+            try:
+                page.click('input#verifyCode')
+                time.sleep(0.3)
+                page.fill('input#verifyCode', '')
+                page.type('input#verifyCode', sms_code, delay=50)
+                actual = page.input_value('input#verifyCode')
+                logger.info(f"登录页短信验证码type填入: 期望={sms_code} 实际={actual}")
+                if actual != sms_code:
+                    raise Exception("值不一致")
+            except Exception as e:
+                logger.warning(f"登录页短信验证码type失败({e})，用JS填入")
+                page.evaluate(f'''() => {{
+                    var el = document.getElementById("verifyCode");
+                    if (!el) {{ var inputs = document.querySelectorAll("input"); for (var i=0;i<inputs.length;i++) {{ if(inputs[i].name=="verifyCode") {{ el=inputs[i]; break; }} }} }}
+                    if (el) {{ el.focus(); el.value = "{sms_code}"; el.dispatchEvent(new Event("input", {{bubbles:true}})); el.dispatchEvent(new Event("change", {{bubbles:true}})); }}
+                }}''')
+                logger.info("登录页短信验证码JS填入完成")
 
-            # 点击登录
-            page.click('input[value="登录"], button:has-text("登录")')
-            time.sleep(3)
-            
+            # 点击登录按钮 — 多种方式尝试
+            logger.info("登录页: 点击登录按钮")
+            login_clicked = False
+
+            # 方式1：input[value="登录"]
+            for selector in ['input[value="登录"]', 'input[value="登 录"]', 'button:has-text("登录")']:
+                try:
+                    page.click(selector, timeout=3000)
+                    login_clicked = True
+                    logger.info(f"登录按钮点击成功: {selector}")
+                    break
+                except Exception:
+                    pass
+
+            # 方式2：a标签（和保存按钮一样的结构）
+            if not login_clicked:
+                for a_selector in ['a#loginBtn', 'a#subBtn', 'a:has-text("登录")']:
+                    try:
+                        page.click(a_selector, timeout=3000)
+                        login_clicked = True
+                        logger.info(f"登录按钮点击成功: {a_selector}")
+                        break
+                    except Exception:
+                        pass
+
+            # 方式3：JS遍历所有元素找登录按钮
+            if not login_clicked:
+                js_result = page.evaluate('''() => {
+                    // 先找input[type=button/submit]
+                    var inputs = document.querySelectorAll("input[type='button'],input[type='submit']");
+                    for (var i = 0; i < inputs.length; i++) {
+                        if (inputs[i].value && inputs[i].value.includes("登")) {
+                            inputs[i].click();
+                            return "clicked_input:" + inputs[i].value;
+                        }
+                    }
+                    // 再找a标签
+                    var links = document.querySelectorAll("a");
+                    for (var i = 0; i < links.length; i++) {
+                        var txt = links[i].textContent || "";
+                        var onclick = links[i].getAttribute("onclick") || "";
+                        if (txt.includes("登") || onclick.includes("login") || onclick.includes("Login")) {
+                            links[i].click();
+                            return "clicked_a:" + txt.substring(0,20);
+                        }
+                    }
+                    // 找button
+                    var btns = document.querySelectorAll("button");
+                    for (var i = 0; i < btns.length; i++) {
+                        if (btns[i].textContent && btns[i].textContent.includes("登")) {
+                            btns[i].click();
+                            return "clicked_button:" + btns[i].textContent.substring(0,20);
+                        }
+                    }
+                    return "NOT_FOUND";
+                }''')
+                logger.info(f"登录按钮JS查找结果: {js_result}")
+                if "NOT_FOUND" not in js_result:
+                    login_clicked = True
+
+            if not login_clicked:
+                logger.error("登录按钮全部方式失败！")
+
+            time.sleep(5)
+
             # 判断登录结果
             self.take_screenshot(page, f"login_{reg_no}")
-            
+
             # 检查是否进入年报页面（URL变化或页面内容变化）
-            if "年报" in page.inner_text("body") or "企业基本信息" in page.inner_text("body"):
+            page_text = page.inner_text("body")
+            if "年报" in page_text or "企业基本信息" in page_text or "填报" in page_text:
                 logger.info(f"登录成功: {reg_no}")
                 return True
             else:
-                logger.warning(f"登录可能失败: {reg_no}")
+                logger.warning(f"登录可能失败: {reg_no}, 页面内容前100字: {page_text[:100]}")
                 return False
-                
+
         except Exception as e:
             logger.error(f"登录异常: {e}")
             self.take_screenshot(page, f"login_error_{reg_no}")

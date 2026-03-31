@@ -896,6 +896,22 @@ class AnnualReportBot:
             except Exception as e:
                 logger.warning(f"检查verifyTxCode位置失败: {e}")
 
+            # 关闭操作指引开关（checkbox id="czybtn"，checked时遮罩层会挡住按钮）
+            try:
+                czybtn = captcha_page.query_selector('input#czybtn')
+                if czybtn:
+                    is_checked = captcha_page.evaluate('document.getElementById("czybtn").checked')
+                    if is_checked:
+                        captcha_page.evaluate('document.getElementById("czybtn").click()')
+                        logger.info("操作指引已关闭")
+                        time.sleep(1)
+                    else:
+                        logger.info("操作指引已经是关闭状态")
+                else:
+                    logger.info("未找到操作指引开关，跳过")
+            except Exception as e:
+                logger.warning(f"关闭操作指引失败: {e}，继续执行")
+
             # 等待验证码输入框出现
             try:
                 captcha_page.wait_for_selector('input#verifyTxCode', timeout=10000)

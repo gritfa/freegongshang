@@ -260,8 +260,12 @@ class AnnualReportBot:
             new_id = enterprise.get("新联络员身份证", "")
             new_phone = enterprise.get("新联络员手机号", "")
 
+            # 先单独填注册号（填入后页面可能会AJAX加载其他字段）
             fields_to_fill = [
                 ("regNo", reg_no, "注册号"),
+            ]
+            # 注册号以外的字段，在regNo填入后再处理
+            other_fields = [
                 ("leRep", enterprise.get("法定代表人", ""), "法定代表人"),
                 ("certId", enterprise.get("身份证", ""), "法定代表人证件号"),
                 ("liaName_xin", new_name, "新联络员姓名"),
@@ -273,50 +277,307 @@ class AnnualReportBot:
                 if not field_value:
                     logger.warning(f"字段为空，跳过: {field_label}")
                     continue
-                selector = f'input[name="{field_name}"]'
-                # 先检查元素是否存在（不要求可见）
-                try:
-                    form_context.wait_for_selector(selector, timeout=5000, state="attached")
-                except Exception:
-                    logger.warning(f"元素不存在: {field_label} ({field_name})")
-                    continue
-                # 检查元素是否可见
-                is_visible = form_context.locator(selector).is_visible()
+
+                # 用JS查找元素（同时尝试id和name两种方式）
+                el_info = form_context.evaluate(f'''() => {{
+                    var el = document.getElementById("{field_name}");
+                    if (!el) el = document.querySelector('input[name="{field_name}"]');
+                    if (!el) return null;
+                    return {{
+                        tag: el.tagName,
+                        type: el.type || "",
+                        visible: !!(el.offsetWidth || el.offsetHeight || el.getClientRects().length),
+                        id: el.id || "",
+                        name: el.name || ""
+                    }};
+                }}''')
+
+                if not el_info:
+                    # 如果regNo已填入，等待页面加载后再试一次
+                    if field_name != "regNo":
+                        logger.info(f"元素暂未找到，等待3秒后重试: {field_label} ({field_name})")
+                        time.sleep(3)
+                        el_info = form_context.evaluate(f'''() => {{
+                            var el = document.getElementById("{field_name}");
+                            if (!el) el = document.querySelector('input[name="{field_name}"]');
+                            if (!el) return null;
+                            return {{
+                                tag: el.tagName,
+                                type: el.type || "",
+                                visible: !!(el.offsetWidth || el.offsetHeight || el.getClientRects().length),
+                                id: el.id || "",
+                                name: el.name || ""
+                            }};
+                        }}''')
+                    if not el_info:
+                        # 打印页面上所有input元素的信息用于调试
+                        all_inputs = form_context.evaluate('''() => {
+                            var inputs = document.querySelectorAll("input");
+                            var result = [];
+                            inputs.forEach(function(inp) {
+                                result.push(inp.id + "|" + inp.name + "|" + inp.type);
+                            });
+                            return result.join(", ");
+                        }''')
+                        logger.warning(f"元素不存在: {field_label} ({field_name})，页面所有input: {all_inputs}")
+                        continue
+
+                logger.info(f"找到元素: {field_label} ({field_name}) -> id={el_info.get('id')}, name={el_info.get('name')}, type={el_info.get('type')}, visible={el_info.get('visible')}")
+
+                is_visible = el_info.get("visible", False)
+                # 构建有效的CSS选择器（优先用id）
+                if el_info.get("id"):
+                    css_sel = f'#{el_info["id"]}'
+                else:
+                    css_sel = f'input[name="{el_info["name"]}"]'
+
                 if is_visible:
                     # 可见元素：点击+键盘输入
                     try:
-                        form_context.click(selector)
+                        form_context.click(css_sel)
                         time.sleep(0.3)
-                        form_context.fill(selector, "")
-                        form_context.type(selector, field_value, delay=50)
+                        form_context.fill(css_sel, "")
+                        form_context.type(css_sel, str(field_value), delay=50)
                         time.sleep(0.5)
-                        actual = form_context.input_value(selector)
-                        if actual == field_value:
-                            logger.info(f"填入成功(键盘): {field_label} = {field_value[:6]}...")
+                        actual = form_context.input_value(css_sel)
+                        if actual == str(field_value):
+                            logger.info(f"填入成功(键盘): {field_label} = {str(field_value)[:6]}...")
                         else:
-                            raise Exception("值不一致")
-                    except Exception:
+                            raise Exception(f"值不一致: {actual}")
+                    except Exception as e:
+                        logger.warning(f"键盘方式失败({e})，用JS填入")
                         # 键盘方式失败，用JS
                         form_context.evaluate(f'''() => {{
-                            var el = document.querySelector('input[name="{field_name}"]');
+                            var el = document.getElementById("{field_name}") || document.querySelector('input[name="{field_name}"]');
                             if(el) {{ el.value = "{field_value}"; el.dispatchEvent(new Event("input",{{bubbles:true}})); el.dispatchEvent(new Event("change",{{bubbles:true}})); }}
                         }}''')
-                        logger.info(f"填入成功(JS-可见): {field_label} = {field_value[:6]}...")
+                        logger.info(f"填入成功(JS-可见): {field_label} = {str(field_value)[:6]}...")
                 else:
                     # 隐藏元素：直接用JS设值
                     form_context.evaluate(f'''() => {{
-                        var el = document.querySelector('input[name="{field_name}"]');
+                        var el = document.getElementById("{field_name}") || document.querySelector('input[name="{field_name}"]');
                         if(el) {{ el.value = "{field_value}"; el.dispatchEvent(new Event("input",{{bubbles:true}})); el.dispatchEvent(new Event("change",{{bubbles:true}})); }}
                     }}''')
                     # 验证
                     actual = form_context.evaluate(f'''() => {{
-                        var el = document.querySelector('input[name="{field_name}"]');
+                        var el = document.getElementById("{field_name}") || document.querySelector('input[name="{field_name}"]');
                         return el ? el.value : "NOT_FOUND";
                     }}''')
-                    if actual == field_value:
-                        logger.info(f"填入成功(JS-隐藏): {field_label} = {field_value[:6]}...")
+                    if actual == str(field_value):
+                        logger.info(f"填入成功(JS-隐藏): {field_label} = {str(field_value)[:6]}...")
                     else:
-                        logger.warning(f"JS填入可能失败: {field_label} 期望={field_value[:6]} 实际={actual[:6] if actual else 'empty'}")
+                        logger.warning(f"JS填入可能失败: {field_label} 期望={str(field_value)[:6]} 实际={str(actual)[:6] if actual else 'empty'}")
+                time.sleep(0.5)
+
+            # regNo填入后，用Tab键自然触发blur事件（比JS dispatch更可靠）
+            logger.info("注册号已填入，按Tab键触发blur事件...")
+            try:
+                form_context.press('input#regNo', 'Tab')
+            except Exception:
+                pass
+            time.sleep(1)
+            # 再用JS补充触发事件
+            form_context.evaluate('''() => {
+                var el = document.getElementById("regNo") || document.querySelector('input[name="regNo"]');
+                if (el) {
+                    el.dispatchEvent(new Event("blur", {bubbles: true}));
+                    el.dispatchEvent(new Event("change", {bubbles: true}));
+                    // 尝试触发可能的onblur处理函数
+                    if (el.onblur) el.onblur();
+                    if (el.onchange) el.onchange();
+                }
+            }''')
+
+            # 动态等待：检查_xin字段是否出现，最多等30秒
+            # 同时在当前form_context、主页面、所有iframe中搜索
+            xin_found = False
+            for wait_i in range(15):
+                time.sleep(2)
+
+                # 先在当前form_context中查找
+                try:
+                    has_xin = form_context.evaluate('''() => {
+                        return !!(document.getElementById("liaName_xin") ||
+                                  document.querySelector('input[name="liaName_xin"]'));
+                    }''')
+                    if has_xin:
+                        logger.info(f"AJAX加载完成，_xin字段在当前form_context中出现（等待{(wait_i+1)*2}秒）")
+                        xin_found = True
+                        break
+                except Exception:
+                    pass
+
+                # 在主页面中查找
+                try:
+                    has_xin_main = change_page.evaluate('''() => {
+                        return !!(document.getElementById("liaName_xin") ||
+                                  document.querySelector('input[name="liaName_xin"]'));
+                    }''')
+                    if has_xin_main:
+                        form_context = change_page
+                        logger.info(f"_xin字段在主页面中找到，切换form_context（等待{(wait_i+1)*2}秒）")
+                        xin_found = True
+                        break
+                except Exception:
+                    pass
+
+                # 在所有iframe中查找
+                for frame in change_page.frames:
+                    if frame == change_page.main_frame:
+                        continue
+                    try:
+                        has_xin_frame = frame.evaluate('''() => {
+                            return !!(document.getElementById("liaName_xin") ||
+                                      document.querySelector('input[name="liaName_xin"]'));
+                        }''')
+                        if has_xin_frame:
+                            form_context = frame
+                            logger.info(f"_xin字段在iframe中找到，切换form_context: {frame.url}（等待{(wait_i+1)*2}秒）")
+                            xin_found = True
+                            break
+                    except Exception:
+                        pass
+                if xin_found:
+                    break
+
+                # 也用更宽泛的选择器搜索（name包含"xin"的input）
+                try:
+                    xin_inputs = change_page.evaluate('''() => {
+                        var inputs = document.querySelectorAll('input[name*="xin"]');
+                        var result = [];
+                        inputs.forEach(function(inp) {
+                            result.push(inp.id + "|" + inp.name + "|" + inp.type);
+                        });
+                        return result.join(", ");
+                    }''')
+                    if xin_inputs:
+                        logger.info(f"主页面中包含'xin'的input: {xin_inputs}")
+                except Exception:
+                    pass
+
+                logger.info(f"等待AJAX加载中... ({(wait_i+1)*2}秒)")
+
+            if not xin_found:
+                # 最后尝试：打印所有页面和iframe中的全部input元素用于调试
+                logger.warning("等待30秒后_xin字段仍未出现")
+                try:
+                    all_inputs_main = change_page.evaluate('''() => {
+                        var inputs = document.querySelectorAll("input, select, textarea");
+                        var result = [];
+                        inputs.forEach(function(el) {
+                            result.push(el.tagName + "#" + el.id + "|name=" + el.name + "|type=" + el.type);
+                        });
+                        return result.join("\\n");
+                    }''')
+                    logger.info(f"主页面所有表单元素:\\n{all_inputs_main}")
+                except Exception:
+                    pass
+                for frame in change_page.frames:
+                    if frame == change_page.main_frame:
+                        continue
+                    try:
+                        all_inputs_frame = frame.evaluate('''() => {
+                            var inputs = document.querySelectorAll("input, select, textarea");
+                            var result = [];
+                            inputs.forEach(function(el) {
+                                result.push(el.tagName + "#" + el.id + "|name=" + el.name + "|type=" + el.type);
+                            });
+                            return result.join("\\n");
+                        }''')
+                        logger.info(f"iframe({frame.url})所有表单元素:\\n{all_inputs_frame}")
+                    except Exception:
+                        pass
+                logger.warning("尝试继续填入...")
+
+            time.sleep(1)
+
+            # 填入其余字段
+            for field_name, field_value, field_label in other_fields:
+                if not field_value:
+                    logger.warning(f"字段为空，跳过: {field_label}")
+                    continue
+
+                # 用JS查找元素（同时尝试id和name两种方式）
+                el_info = form_context.evaluate(f'''() => {{
+                    var el = document.getElementById("{field_name}");
+                    if (!el) el = document.querySelector('input[name="{field_name}"]');
+                    if (!el) return null;
+                    return {{
+                        tag: el.tagName,
+                        type: el.type || "",
+                        visible: !!(el.offsetWidth || el.offsetHeight || el.getClientRects().length),
+                        id: el.id || "",
+                        name: el.name || ""
+                    }};
+                }}''')
+
+                if not el_info:
+                    logger.info(f"元素暂未找到，等待3秒后重试: {field_label} ({field_name})")
+                    time.sleep(3)
+                    el_info = form_context.evaluate(f'''() => {{
+                        var el = document.getElementById("{field_name}");
+                        if (!el) el = document.querySelector('input[name="{field_name}"]');
+                        if (!el) return null;
+                        return {{
+                            tag: el.tagName,
+                            type: el.type || "",
+                            visible: !!(el.offsetWidth || el.offsetHeight || el.getClientRects().length),
+                            id: el.id || "",
+                            name: el.name || ""
+                        }};
+                    }}''')
+                    if not el_info:
+                        all_inputs = form_context.evaluate('''() => {
+                            var inputs = document.querySelectorAll("input");
+                            var result = [];
+                            inputs.forEach(function(inp) {
+                                result.push(inp.id + "|" + inp.name + "|" + inp.type);
+                            });
+                            return result.join(", ");
+                        }''')
+                        logger.warning(f"元素不存在: {field_label} ({field_name})，页面所有input: {all_inputs}")
+                        continue
+
+                logger.info(f"找到元素: {field_label} ({field_name}) -> id={el_info.get('id')}, name={el_info.get('name')}, type={el_info.get('type')}, visible={el_info.get('visible')}")
+
+                is_visible = el_info.get("visible", False)
+                if el_info.get("id"):
+                    css_sel = f'#{el_info["id"]}'
+                else:
+                    css_sel = f'input[name="{el_info["name"]}"]'
+
+                if is_visible:
+                    try:
+                        form_context.click(css_sel)
+                        time.sleep(0.3)
+                        form_context.fill(css_sel, "")
+                        form_context.type(css_sel, str(field_value), delay=50)
+                        time.sleep(0.5)
+                        actual = form_context.input_value(css_sel)
+                        if actual == str(field_value):
+                            logger.info(f"填入成功(键盘): {field_label} = {str(field_value)[:6]}...")
+                        else:
+                            raise Exception(f"值不一致: {actual}")
+                    except Exception as e:
+                        logger.warning(f"键盘方式失败({e})，用JS填入")
+                        form_context.evaluate(f'''() => {{
+                            var el = document.getElementById("{field_name}") || document.querySelector('input[name="{field_name}"]');
+                            if(el) {{ el.value = "{field_value}"; el.dispatchEvent(new Event("input",{{bubbles:true}})); el.dispatchEvent(new Event("change",{{bubbles:true}})); }}
+                        }}''')
+                        logger.info(f"填入成功(JS-可见): {field_label} = {str(field_value)[:6]}...")
+                else:
+                    form_context.evaluate(f'''() => {{
+                        var el = document.getElementById("{field_name}") || document.querySelector('input[name="{field_name}"]');
+                        if(el) {{ el.value = "{field_value}"; el.dispatchEvent(new Event("input",{{bubbles:true}})); el.dispatchEvent(new Event("change",{{bubbles:true}})); }}
+                    }}''')
+                    actual = form_context.evaluate(f'''() => {{
+                        var el = document.getElementById("{field_name}") || document.querySelector('input[name="{field_name}"]');
+                        return el ? el.value : "NOT_FOUND";
+                    }}''')
+                    if actual == str(field_value):
+                        logger.info(f"填入成功(JS-隐藏): {field_label} = {str(field_value)[:6]}...")
+                    else:
+                        logger.warning(f"JS填入可能失败: {field_label} 期望={str(field_value)[:6]} 实际={str(actual)[:6] if actual else 'empty'}")
                 time.sleep(0.5)
 
             # ---- 下拉框：选择中华人民共和国居民身份证 ----

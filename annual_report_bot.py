@@ -913,12 +913,12 @@ class AnnualReportBot:
             # 点击获取短信验证码 — 直接用JS调用函数
             logger.info("登录页: 点击获取验证码")
             try:
-                page.evaluate('getCode2()')
+                captcha_page.evaluate('getCode2()')
                 logger.info("登录页获取验证码: JS getCode2() 调用成功")
             except Exception as e1:
                 logger.warning(f"登录页JS getCode2() 失败: {e1}，尝试点击按钮")
                 try:
-                    page.evaluate('document.getElementById("butn").click()')
+                    captcha_page.evaluate('document.getElementById("butn").click()')
                     logger.info("登录页获取验证码: JS click butn 成功")
                 except Exception as e2:
                     logger.error(f"登录页获取验证码按钮全部失败: {e2}")
@@ -935,17 +935,17 @@ class AnnualReportBot:
             # 填入短信验证码（登录页用 vcode，不是联络员变更页的 verifyCode）
             logger.info(f"登录页: 准备填入短信验证码: {sms_code}")
             try:
-                page.click('input#vcode')
+                captcha_page.click('input#vcode')
                 time.sleep(0.3)
-                page.fill('input#vcode', '')
-                page.type('input#vcode', sms_code, delay=50)
-                actual = page.input_value('input#vcode')
+                captcha_page.fill('input#vcode', '')
+                captcha_page.type('input#vcode', sms_code, delay=50)
+                actual = captcha_page.input_value('input#vcode')
                 logger.info(f"登录页短信验证码type填入: 期望={sms_code} 实际={actual}")
                 if actual != sms_code:
                     raise Exception("值不一致")
             except Exception as e:
                 logger.warning(f"登录页短信验证码type失败({e})，用JS填入")
-                page.evaluate(f'''() => {{
+                captcha_page.evaluate(f'''() => {{
                     var el = document.getElementById("vcode");
                     if (!el) {{ var inputs = document.querySelectorAll("input"); for (var i=0;i<inputs.length;i++) {{ if(inputs[i].name=="vcode") {{ el=inputs[i]; break; }} }} }}
                     if (el) {{ el.focus(); el.value = "{sms_code}"; el.dispatchEvent(new Event("input", {{bubbles:true}})); el.dispatchEvent(new Event("change", {{bubbles:true}})); }}
@@ -959,7 +959,7 @@ class AnnualReportBot:
             # 方式1：用文字匹配<a>标签"点击登陆"
             for selector in ['a:has-text("点击登陆")', 'a:has-text("点击登录")', 'a:has-text("登陆")', 'a:has-text("登录")']:
                 try:
-                    btn = page.locator(selector).first
+                    btn = captcha_page.locator(selector).first
                     if btn.count() > 0:
                         btn.click(timeout=5000)
                         login_clicked = True
@@ -970,7 +970,7 @@ class AnnualReportBot:
 
             # 方式2：JS精确查找"点击登陆"链接
             if not login_clicked:
-                js_result = page.evaluate('''() => {
+                js_result = captcha_page.evaluate('''() => {
                     var links = document.querySelectorAll("a");
                     for (var i = 0; i < links.length; i++) {
                         var txt = (links[i].textContent || "").trim();

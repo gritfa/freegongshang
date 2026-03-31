@@ -8,6 +8,7 @@ import re
 import time
 import threading
 from http.server import HTTPServer, BaseHTTPRequestHandler
+from urllib.parse import unquote, unquote_plus
 import json
 from loguru import logger
 import config
@@ -47,12 +48,12 @@ class SmsReceiver:
                 try:
                     data = json.loads(body)
                 except Exception:
-                    # SmsForwarder可能用form格式
+                    # SmsForwarder可能用form格式，需要URL解码
                     data = {}
                     for pair in body.split("&"):
                         if "=" in pair:
                             k, v = pair.split("=", 1)
-                            data[k] = v
+                            data[unquote_plus(k)] = unquote_plus(v)
 
                 # 提取短信内容（兼容SmsForwarder的多种格式）
                 sms_content = (
@@ -60,8 +61,13 @@ class SmsReceiver:
                     or data.get("sms_content", "")
                     or data.get("msg", "")
                     or data.get("text", "")
+                    or data.get("sms_msg", "")
                     or body
                 )
+                # URL解码（确保中文和特殊字符正确）
+                sms_content = unquote_plus(str(sms_content))
+                logger.info(f"解码后短信内容: {sms_content[:200]}")
+
                 phone_from = (
                     data.get("from", "")
                     or data.get("phone", "")
@@ -69,6 +75,7 @@ class SmsReceiver:
                     or data.get("sim_info", "")
                     or ""
                 )
+                phone_from = unquote_plus(str(phone_from))
 
                 # 提取验证码（4-8位数字）
                 code = receiver._extract_code(sms_content)
@@ -80,6 +87,8 @@ class SmsReceiver:
                         "from": phone_from,
                     }
                     logger.info(f"提取到验证码: {code} (来自: {phone_from})")
+                else:
+                    logger.warning(f"未能从短信中提取到验证码，短信内容: {sms_content[:200]}")
 
                 self.send_response(200)
                 self.send_header("Content-Type", "application/json")

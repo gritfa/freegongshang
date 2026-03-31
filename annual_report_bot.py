@@ -331,10 +331,22 @@ class AnnualReportBot:
                 return False
 
             # 用JS填入短信验证码
-            form_context.evaluate(f'''() => {{
+            sms_fill_result = form_context.evaluate(f'''() => {{
                 var el = document.getElementById("verifyCode");
-                if (el) {{ el.focus(); el.value = "{sms_code}"; el.dispatchEvent(new Event("input", {{bubbles:true}})); }}
+                if (!el) {{
+                    var inputs = document.querySelectorAll("input");
+                    for (var i=0;i<inputs.length;i++) {{ if(inputs[i].name=="verifyCode") {{ el=inputs[i]; break; }} }}
+                }}
+                if (el) {{
+                    el.focus();
+                    el.value = "{sms_code}";
+                    el.dispatchEvent(new Event("input", {{bubbles:true}}));
+                    el.dispatchEvent(new Event("change", {{bubbles:true}}));
+                    return "填入成功: " + el.value;
+                }}
+                return "NOT_FOUND";
             }}''')
+            logger.info(f"短信验证码填入结果: {sms_fill_result}")
 
             # ---- 提交 ----
             logger.info("点击保存按钮")

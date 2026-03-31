@@ -89,6 +89,28 @@ class AnnualReportBot:
                 # 用JS直接填入验证码输入框（根据传入的selector查找）
                 # 从selector中提取id，如 "input#verifyTxCode" -> "verifyTxCode"
                 input_id = captcha_input_selector.split('#')[-1] if '#' in captcha_input_selector else ""
+
+                # 先尝试用Playwright的type方法（更可靠）
+                filled_by_type = False
+                try:
+                    input_el = page.locator(captcha_input_selector)
+                    if input_el.count() > 0:
+                        input_el.click(timeout=3000)
+                        time.sleep(0.2)
+                        input_el.fill('', timeout=3000)
+                        input_el.type(code, delay=50, timeout=5000)
+                        actual = input_el.input_value(timeout=3000)
+                        logger.info(f"验证码Playwright type填入: 期望={code} 实际={actual}")
+                        if actual == code:
+                            filled_by_type = True
+                except Exception as type_err:
+                    logger.warning(f"验证码Playwright type失败: {type_err}")
+
+                if filled_by_type:
+                    logger.info(f"验证码填入成功(type方式) (第{attempt+1}次)")
+                    return True
+
+                # 备选：用JS填入
                 fill_result = page.evaluate('''([code, inputId, selector]) => {
                     var el = null;
                     // 优先用id查找
@@ -109,6 +131,16 @@ class AnnualReportBot:
                             }
                         }
                     }
+                    // 再备选：按placeholder查找验证码输入框
+                    if (!el) {
+                        var inputs = document.querySelectorAll("input[type='text']");
+                        for (var i = 0; i < inputs.length; i++) {
+                            if (inputs[i].placeholder && inputs[i].placeholder.indexOf("验证码") >= 0) {
+                                el = inputs[i];
+                                break;
+                            }
+                        }
+                    }
                     if (el) {
                         el.focus();
                         el.value = code;
@@ -116,7 +148,12 @@ class AnnualReportBot:
                         el.dispatchEvent(new Event("change", {bubbles: true}));
                         return el.value;
                     }
-                    return "NOT_FOUND";
+                    // 返回调试信息
+                    var allInputs = [];
+                    document.querySelectorAll("input").forEach(function(inp) {
+                        allInputs.push(inp.id + "/" + inp.name + "/" + inp.type);
+                    });
+                    return "NOT_FOUND|inputs:" + allInputs.join(",");
                 }''', [code, input_id, captcha_input_selector])
 
                 logger.info(f"验证码填入结果: 识别={code}, 填入后={fill_result} (第{attempt+1}次)")
@@ -549,8 +586,64 @@ class AnnualReportBot:
             time.sleep(0.5)
 
             # 图形验证码（登录页用 verifyTxCode，不是联络员变更页的 verifyCodetw）
+            # 先诊断页面状态：列出所有input元素和iframe
+            try:
+                diag = page.evaluate('''() => {
+                    var result = {inputs: [], iframes: [], url: location.href};
+                    document.querySelectorAll("input").forEach(el => {
+                        result.inputs.push({id: el.id, name: el.name, type: el.type, visible: el.offsetParent !== null});
+                    });
+                    document.querySelectorAll("iframe").forEach(el => {
+                        result.iframes.push({id: el.id, name: el.name, src: el.src});
+                    });
+                    return result;
+                }''')
+                logger.info(f"登录页诊断 - URL: {diag.get('url', 'N/A')}")
+                logger.info(f"登录页诊断 - 所有input: {json.dumps(diag.get('inputs', []), ensure_ascii=False)}")
+                if diag.get('iframes'):
+                    logger.info(f"登录页诊断 - iframe: {json.dumps(diag.get('iframes', []), ensure_ascii=False)}")
+            except Exception as diag_err:
+                logger.warning(f"登录页诊断失败: {diag_err}")
+
+            # 检查verifyTxCode是否在iframe中
+            captcha_page = page  # 默认在主页面
+            try:
+                has_input = page.evaluate('() => !!document.getElementById("verifyTxCode")')
+                if not has_input:
+                    logger.warning("主页面未找到verifyTxCode，检查iframe...")
+                    for frame in page.frames:
+                        try:
+                            has_in_frame = frame.evaluate('() => !!document.getElementById("verifyTxCode")')
+                            if has_in_frame:
+                                logger.info(f"在iframe中找到verifyTxCode: {frame.url}")
+                                captcha_page = frame
+                                break
+                        except Exception:
+                            continue
+                    if captcha_page == page:
+                        # 仍未找到，等待更长时间后再试
+                        logger.warning("iframe中也未找到，等待5秒后重试...")
+                        time.sleep(5)
+                        # 再次尝试点击联络员登录tab
+                        try:
+                            page.click('a#denglu-a2', timeout=3000)
+                            time.sleep(2)
+                        except Exception:
+                            pass
+                else:
+                    logger.info("主页面已找到verifyTxCode")
+            except Exception as e:
+                logger.warning(f"检查verifyTxCode位置失败: {e}")
+
+            # 等待验证码输入框出现
+            try:
+                captcha_page.wait_for_selector('input#verifyTxCode', timeout=10000)
+                logger.info("验证码输入框已就绪")
+            except Exception:
+                logger.warning("等待verifyTxCode超时，继续尝试...")
+
             if not self.solve_captcha_with_retry(
-                page,
+                captcha_page,
                 'img#vimg',
                 'input#verifyTxCode'
             ):

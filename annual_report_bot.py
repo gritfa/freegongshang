@@ -440,6 +440,23 @@ class AnnualReportBot:
                 logger.info("已在登录页，直接操作")
                 time.sleep(2)
 
+            # 点击"联络员登录"标签页
+            try:
+                page.click('a#denglu-a2', timeout=5000)
+                logger.info("已点击联络员登录标签")
+                time.sleep(2)
+            except Exception as e:
+                logger.warning(f"点击联络员登录标签失败({e})，可能已在该标签页")
+
+            # 勾选协议复选框
+            try:
+                checkbox = page.locator('input#czzybut')
+                if checkbox.count() > 0 and not checkbox.is_checked():
+                    checkbox.check()
+                    logger.info("已勾选协议复选框")
+            except Exception as e:
+                logger.warning(f"勾选协议复选框失败({e})，继续")
+
             # 等待注册号输入框出现
             try:
                 page.wait_for_selector('input#regNo', timeout=15000)
@@ -517,58 +534,31 @@ class AnnualReportBot:
                 }}''')
                 logger.info("登录页短信验证码JS填入完成")
 
-            # 点击登录按钮 — 多种方式尝试
+            # 点击登录按钮 — "点击登陆"是<a>标签
             logger.info("登录页: 点击登录按钮")
             login_clicked = False
 
-            # 方式1：input[value="登录"]
-            for selector in ['input[value="登录"]', 'input[value="登 录"]', 'button:has-text("登录")']:
+            # 方式1：用文字匹配<a>标签"点击登陆"
+            for selector in ['a:has-text("点击登陆")', 'a:has-text("点击登录")', 'a:has-text("登陆")', 'a:has-text("登录")']:
                 try:
-                    page.click(selector, timeout=3000)
-                    login_clicked = True
-                    logger.info(f"登录按钮点击成功: {selector}")
-                    break
+                    btn = page.locator(selector).first
+                    if btn.count() > 0:
+                        btn.click(timeout=5000)
+                        login_clicked = True
+                        logger.info(f"登录按钮点击成功: {selector}")
+                        break
                 except Exception:
                     pass
 
-            # 方式2：a标签（和保存按钮一样的结构）
-            if not login_clicked:
-                for a_selector in ['a#loginBtn', 'a#subBtn', 'a:has-text("登录")']:
-                    try:
-                        page.click(a_selector, timeout=3000)
-                        login_clicked = True
-                        logger.info(f"登录按钮点击成功: {a_selector}")
-                        break
-                    except Exception:
-                        pass
-
-            # 方式3：JS遍历所有元素找登录按钮
+            # 方式2：JS精确查找"点击登陆"链接
             if not login_clicked:
                 js_result = page.evaluate('''() => {
-                    // 先找input[type=button/submit]
-                    var inputs = document.querySelectorAll("input[type='button'],input[type='submit']");
-                    for (var i = 0; i < inputs.length; i++) {
-                        if (inputs[i].value && inputs[i].value.includes("登")) {
-                            inputs[i].click();
-                            return "clicked_input:" + inputs[i].value;
-                        }
-                    }
-                    // 再找a标签
                     var links = document.querySelectorAll("a");
                     for (var i = 0; i < links.length; i++) {
-                        var txt = links[i].textContent || "";
-                        var onclick = links[i].getAttribute("onclick") || "";
-                        if (txt.includes("登") || onclick.includes("login") || onclick.includes("Login")) {
+                        var txt = (links[i].textContent || "").trim();
+                        if (txt === "点击登陆" || txt === "点击登录" || txt === "登陆" || txt === "登录") {
                             links[i].click();
-                            return "clicked_a:" + txt.substring(0,20);
-                        }
-                    }
-                    // 找button
-                    var btns = document.querySelectorAll("button");
-                    for (var i = 0; i < btns.length; i++) {
-                        if (btns[i].textContent && btns[i].textContent.includes("登")) {
-                            btns[i].click();
-                            return "clicked_button:" + btns[i].textContent.substring(0,20);
+                            return "clicked:" + txt;
                         }
                     }
                     return "NOT_FOUND";

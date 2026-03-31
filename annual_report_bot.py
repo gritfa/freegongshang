@@ -773,6 +773,39 @@ class AnnualReportBot:
                     logger.warning("未找到弹窗或已关闭")
                 time.sleep(0.5)
 
+            # 关闭操作指引开关（蓝色弹窗关闭后立即执行）
+            try:
+                # 先在主页面尝试
+                czybtn_found = page.evaluate('() => !!document.getElementById("czybtn")')
+                if czybtn_found:
+                    is_checked = page.evaluate('document.getElementById("czybtn").checked')
+                    if is_checked:
+                        page.evaluate('document.getElementById("czybtn").click()')
+                        logger.info("操作指引已关闭（主页面）")
+                        time.sleep(1)
+                    else:
+                        logger.info("操作指引已经是关闭状态")
+                else:
+                    # 主页面没找到，在iframe里找
+                    for frame in page.frames:
+                        try:
+                            found = frame.evaluate('() => !!document.getElementById("czybtn")')
+                            if found:
+                                is_checked = frame.evaluate('document.getElementById("czybtn").checked')
+                                if is_checked:
+                                    frame.evaluate('document.getElementById("czybtn").click()')
+                                    logger.info("操作指引已关闭（iframe）")
+                                    time.sleep(1)
+                                else:
+                                    logger.info("操作指引已经是关闭状态（iframe）")
+                                break
+                        except Exception:
+                            continue
+                    else:
+                        logger.info("未找到操作指引开关，跳过")
+            except Exception as e:
+                logger.warning(f"关闭操作指引失败: {e}，继续执行")
+
             # 关闭 layui-layer 弹窗（如果存在）
             try:
                 page.evaluate('''() => {
@@ -895,22 +928,6 @@ class AnnualReportBot:
                     logger.info("主页面已找到verifyTxCode")
             except Exception as e:
                 logger.warning(f"检查verifyTxCode位置失败: {e}")
-
-            # 关闭操作指引开关（checkbox id="czybtn"，checked时遮罩层会挡住按钮）
-            try:
-                czybtn = captcha_page.query_selector('input#czybtn')
-                if czybtn:
-                    is_checked = captcha_page.evaluate('document.getElementById("czybtn").checked')
-                    if is_checked:
-                        captcha_page.evaluate('document.getElementById("czybtn").click()')
-                        logger.info("操作指引已关闭")
-                        time.sleep(1)
-                    else:
-                        logger.info("操作指引已经是关闭状态")
-                else:
-                    logger.info("未找到操作指引开关，跳过")
-            except Exception as e:
-                logger.warning(f"关闭操作指引失败: {e}，继续执行")
 
             # 等待验证码输入框出现
             try:

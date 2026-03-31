@@ -330,23 +330,37 @@ class AnnualReportBot:
                 logger.error("未获取到短信验证码")
                 return False
 
-            # 用JS填入短信验证码
-            sms_fill_result = form_context.evaluate(f'''() => {{
-                var el = document.getElementById("verifyCode");
-                if (!el) {{
-                    var inputs = document.querySelectorAll("input");
-                    for (var i=0;i<inputs.length;i++) {{ if(inputs[i].name=="verifyCode") {{ el=inputs[i]; break; }} }}
-                }}
-                if (el) {{
-                    el.focus();
-                    el.value = "{sms_code}";
-                    el.dispatchEvent(new Event("input", {{bubbles:true}}));
-                    el.dispatchEvent(new Event("change", {{bubbles:true}}));
-                    return "填入成功: " + el.value;
-                }}
-                return "NOT_FOUND";
-            }}''')
-            logger.info(f"短信验证码填入结果: {sms_fill_result}")
+            logger.info(f"准备填入短信验证码: {sms_code}")
+
+            # 先用type方式填入短信验证码（和图形验证码一样的方式）
+            try:
+                form_context.click('input#verifyCode')
+                time.sleep(0.3)
+                form_context.fill('input#verifyCode', '')
+                form_context.type('input#verifyCode', sms_code, delay=50)
+                actual = form_context.input_value('input#verifyCode')
+                logger.info(f"短信验证码type方式填入: 期望={sms_code} 实际={actual}")
+                if actual != sms_code:
+                    raise Exception("值不一致")
+            except Exception as e:
+                logger.warning(f"type方式失败({e})，用JS填入")
+                # JS方式填入
+                sms_fill_result = form_context.evaluate(f'''() => {{
+                    var el = document.getElementById("verifyCode");
+                    if (!el) {{
+                        var inputs = document.querySelectorAll("input");
+                        for (var i=0;i<inputs.length;i++) {{ if(inputs[i].name=="verifyCode") {{ el=inputs[i]; break; }} }}
+                    }}
+                    if (el) {{
+                        el.focus();
+                        el.value = "{sms_code}";
+                        el.dispatchEvent(new Event("input", {{bubbles:true}}));
+                        el.dispatchEvent(new Event("change", {{bubbles:true}}));
+                        return "JS填入成功: " + el.value;
+                    }}
+                    return "NOT_FOUND";
+                }}''')
+                logger.info(f"短信验证码JS填入结果: {sms_fill_result}")
 
             # ---- 提交 ----
             logger.info("点击保存按钮")

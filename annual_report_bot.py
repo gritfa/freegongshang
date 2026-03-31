@@ -46,13 +46,13 @@ class AnnualReportBot:
         for attempt in range(config.CAPTCHA_MAX_RETRY):
             try:
                 # 等待验证码图片出现
-                page.wait_for_selector('img#vimg', timeout=10000)
+                page.wait_for_selector(captcha_img_selector, timeout=10000)
                 time.sleep(1)
 
                 # 主要方式：Playwright截图
                 code = None
                 try:
-                    img_el = page.locator('img#vimg')
+                    img_el = page.locator(captcha_img_selector)
                     img_el.wait_for(timeout=10000)
                     time.sleep(0.5)
                     img_bytes = img_el.screenshot(timeout=15000)
@@ -86,15 +86,24 @@ class AnnualReportBot:
                     time.sleep(1)
                     continue
 
-                # 用JS直接填入验证码输入框（最可靠的方式）
-                fill_result = page.evaluate('''(code) => {
-                    var el = document.getElementById("verifyCodetw");
+                # 用JS直接填入验证码输入框（根据传入的selector查找）
+                # 从selector中提取id，如 "input#verifyTxCode" -> "verifyTxCode"
+                input_id = captcha_input_selector.split('#')[-1] if '#' in captcha_input_selector else ""
+                fill_result = page.evaluate('''([code, inputId, selector]) => {
+                    var el = null;
+                    // 优先用id查找
+                    if (inputId) {
+                        el = document.getElementById(inputId);
+                    }
+                    // 备选：用querySelector
                     if (!el) {
-                        // 备选：按name查找
+                        el = document.querySelector(selector);
+                    }
+                    // 再备选：按name查找
+                    if (!el) {
                         var inputs = document.querySelectorAll("input");
                         for (var i = 0; i < inputs.length; i++) {
-                            if (inputs[i].name && inputs[i].name.toLowerCase().indexOf("verifycode") >= 0
-                                && inputs[i].name.toLowerCase().indexOf("tw") >= 0) {
+                            if (inputs[i].id === inputId || inputs[i].name === inputId) {
                                 el = inputs[i];
                                 break;
                             }
@@ -108,7 +117,7 @@ class AnnualReportBot:
                         return el.value;
                     }
                     return "NOT_FOUND";
-                }''', code)
+                }''', [code, input_id, captcha_input_selector])
 
                 logger.info(f"验证码填入结果: 识别={code}, 填入后={fill_result} (第{attempt+1}次)")
 

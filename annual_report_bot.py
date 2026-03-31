@@ -129,8 +129,12 @@ class AnnualReportBot:
     
     # ==================== 联络员变更 ====================
     
-    def change_liaison(self, page: Page, enterprise: dict) -> bool:
-        """执行联络员变更"""
+    def change_liaison(self, page: Page, enterprise: dict):
+        """执行联络员变更
+
+        Returns:
+            成功时返回当前活动页面（可能是原page或变更后的页面），失败返回None
+        """
         reg_no = enterprise.get("注册号/统一社会信用代码", enterprise.get("注册号", ""))
         logger.info(f"开始联络员变更: {enterprise.get('企业名称', '')} ({reg_no})")
 
@@ -405,19 +409,16 @@ class AnnualReportBot:
                 "联络员登录" in page_text or "liaisonsLogin" in current_url or
                 current_url != config.CHANGE_LIAISON_URL):
                 logger.info(f"联络员变更成功（页面已跳转）: {reg_no}")
-                if change_page != page:
-                    change_page.close()
-                return True
+                # 返回当前活动页面（不关闭，因为可能已跳转到登录页）
+                return change_page
             else:
                 logger.warning(f"联络员变更结果不确定: {page_text[:200]}")
-                if change_page != page:
-                    change_page.close()
-                return False
+                return None
 
         except Exception as e:
             logger.error(f"联络员变更异常: {e}")
             self.take_screenshot(page, f"change_liaison_error_{reg_no}")
-            return False
+            return None
     
     # ==================== 联络员登录 ====================
     
@@ -465,6 +466,21 @@ class AnnualReportBot:
                     logger.warning("未找到弹窗或已关闭")
                 time.sleep(0.5)
 
+            # 关闭 layui-layer 弹窗（如果存在）
+            try:
+                page.evaluate('''() => {
+                    // 关闭所有 layui-layer 弹窗
+                    document.querySelectorAll("a.layui-layer-close").forEach(btn => btn.click());
+                    // 隐藏遮罩层
+                    document.querySelectorAll("div.layui-layer-shade").forEach(el => el.style.display = "none");
+                    // 隐藏弹窗本身
+                    document.querySelectorAll("div.layui-layer").forEach(el => el.style.display = "none");
+                }''')
+                logger.info("已处理 layui-layer 弹窗")
+                time.sleep(1)
+            except Exception:
+                logger.debug("无 layui-layer 弹窗或已关闭")
+
             # 点击"联络员登录"标签页
             try:
                 page.click('a#denglu-a2', timeout=5000)
@@ -511,6 +527,17 @@ class AnnualReportBot:
 
             # 等待页面自动加载联络员信息
             time.sleep(3)
+
+            # 再次检查并关闭可能出现的 layui-layer 弹窗
+            try:
+                page.evaluate('''() => {
+                    document.querySelectorAll("a.layui-layer-close").forEach(btn => btn.click());
+                    document.querySelectorAll("div.layui-layer-shade").forEach(el => el.style.display = "none");
+                    document.querySelectorAll("div.layui-layer").forEach(el => el.style.display = "none");
+                }''')
+            except Exception:
+                pass
+            time.sleep(0.5)
 
             # 图形验证码
             if not self.solve_captcha_with_retry(
@@ -719,13 +746,16 @@ class AnnualReportBot:
         
         # 步骤1：联络员变更
         if need_change_liaison:
-            if self.change_liaison(page, enterprise):
+            active_page = self.change_liaison(page, enterprise)
+            if active_page:
                 result["联络员变更"] = "成功"
+                # 使用变更后返回的活动页面（可能已跳转到登录页）
+                page = active_page
             else:
                 result["联络员变更"] = "失败"
                 logger.error(f"联络员变更失败，跳过此企业: {reg_no}")
                 return result
-        
+
         # 步骤2：登录（用新联络员手机号）
         phone = enterprise.get("新联络员手机号", "")
         if self.login(page, reg_no, phone):

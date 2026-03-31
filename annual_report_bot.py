@@ -363,41 +363,29 @@ class AnnualReportBot:
                 logger.info(f"短信验证码JS填入结果: {sms_fill_result}")
 
             # ---- 提交保存 ----
-            logger.info("点击保存按钮")
+            logger.info("点击保存按钮 (a#subBtn)")
             save_clicked = False
-            # 尝试多种选择器找保存按钮
-            save_selectors = [
-                'input[value="保 存"]',
-                'input[value="保存"]',
-                'button:has-text("保存")',
-                'button:has-text("保 存")',
-                'a:has-text("保存")',
-                'a:has-text("保 存")',
-                'input[type="button"][value*="保"]',
-                'input[type="submit"][value*="保"]',
-            ]
-            for sel in save_selectors:
-                try:
-                    if form_context.locator(sel).count() > 0:
-                        form_context.click(sel, timeout=5000)
-                        save_clicked = True
-                        logger.info(f"保存按钮点击成功: {sel}")
-                        break
-                except Exception:
-                    continue
+            # 保存按钮是 <a type="button" id="subBtn"><img src="...add2.png"></a>
+            try:
+                change_page.click('a#subBtn', timeout=5000)
+                save_clicked = True
+                logger.info("保存按钮点击成功: a#subBtn")
+            except Exception as e:
+                logger.warning(f"a#subBtn点击失败: {e}")
 
             if not save_clicked:
-                # 用JS遍历所有可点击元素找保存按钮
+                # 直接用JS点击
                 logger.info("尝试用JS点击保存按钮")
                 js_result = change_page.evaluate('''() => {
-                    // 查找所有input/button/a元素
-                    var elements = document.querySelectorAll("input, button, a");
-                    for (var i = 0; i < elements.length; i++) {
-                        var el = elements[i];
-                        var text = (el.value || el.textContent || "").trim();
-                        if (text.includes("保") && text.includes("存")) {
-                            el.click();
-                            return "clicked: " + el.tagName + " " + text;
+                    var btn = document.getElementById("subBtn");
+                    if (btn) { btn.click(); return "clicked_subBtn"; }
+                    // 兜底：找所有a标签里的img
+                    var links = document.querySelectorAll("a[type='button']");
+                    for (var i = 0; i < links.length; i++) {
+                        var img = links[i].querySelector("img");
+                        if (img && img.src && img.src.includes("add")) {
+                            links[i].click();
+                            return "clicked_a_img";
                         }
                     }
                     return "NOT_FOUND";

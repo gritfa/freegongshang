@@ -444,6 +444,27 @@ class AnnualReportBot:
                 logger.info("已在登录页，直接操作")
                 time.sleep(2)
 
+            # 关闭蓝色弹窗（如果存在）
+            try:
+                close_btn = page.locator('div#divClose')
+                if close_btn.count() > 0:
+                    close_btn.click(timeout=3000)
+                    logger.info("已关闭蓝色弹窗")
+                    time.sleep(1)
+            except Exception:
+                # 也尝试JS方式关闭
+                try:
+                    page.evaluate('''() => {
+                        var el = document.getElementById("divClose");
+                        if(el) el.click();
+                        // 也尝试隐藏整个弹窗容器
+                        document.querySelectorAll('[class*="float"],[class*="notice"],[class*="popup"],[class*="tip"]').forEach(e => e.style.display="none");
+                    }''')
+                    logger.info("JS方式关闭弹窗")
+                except Exception:
+                    logger.warning("未找到弹窗或已关闭")
+                time.sleep(0.5)
+
             # 点击"联络员登录"标签页
             try:
                 page.click('a#denglu-a2', timeout=5000)

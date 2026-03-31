@@ -134,24 +134,24 @@ class SmsReceiver:
         return None
 
     def get_latest_code(self, timeout=120):
-        """等待并获取最新验证码"""
+        """等待并获取最新验证码（简化版：只要有验证码就立即返回）"""
         start = time.time()
 
         # 先检查是否已经有验证码（可能在调用前就收到了）
         latest = self.latest_sms.get("_latest", {})
-        if latest.get("code") and latest.get("time", 0) > start - 30:
+        if latest.get("code"):
             code = latest["code"]
-            logger.info(f"get_latest_code: 发现已有验证码 {code}")
+            logger.info(f"get_latest_code: 发现已有验证码 {code}（到达时间距今{time.time()-latest.get('time',0):.1f}秒）")
             self.latest_sms.pop("_latest", None)
             return code
 
-        # 记录当前时间，等待新的验证码
-        logger.info(f"get_latest_code: 开始等待新验证码，超时{timeout}秒")
+        # 没有现成的验证码，开始等待
+        logger.info(f"get_latest_code: 暂无验证码，开始等待，超时{timeout}秒")
         while time.time() - start < timeout:
             latest = self.latest_sms.get("_latest", {})
-            if latest.get("code") and latest.get("time", 0) > start - 30:
+            if latest.get("code"):
                 code = latest["code"]
-                logger.info(f"get_latest_code: 获取到验证码 {code}")
+                logger.info(f"get_latest_code: 等到验证码 {code}")
                 self.latest_sms.pop("_latest", None)
                 return code
             time.sleep(1)

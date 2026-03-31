@@ -490,21 +490,24 @@ class AnnualReportBot:
                 logger.warning("等待登录页表单超时，等3秒再试")
                 time.sleep(3)
 
-            # 填入注册号 — 用type()模拟键盘输入
-            try:
-                page.click('input#regNo')
-                time.sleep(0.3)
-                page.fill('input#regNo', '')
-                page.type('input#regNo', reg_no, delay=50)
-                actual = page.input_value('input#regNo')
-                logger.info(f"注册号填入: 期望={reg_no[:8]}... 实际={actual[:8]}...")
-            except Exception as e:
-                logger.warning(f"注册号type方式失败({e})，用JS填入")
-                page.evaluate(f'''() => {{
-                    var el = document.getElementById("regNo");
-                    if(el) {{ el.value = "{reg_no}"; el.dispatchEvent(new Event("input",{{bubbles:true}})); el.dispatchEvent(new Event("change",{{bubbles:true}})); }}
-                }}''')
-                logger.info(f"注册号JS填入完成: {reg_no[:8]}...")
+            # 填入注册号 — 用JS直接设值，不点击输入框（避免触发弹窗）
+            page.evaluate(f'''() => {{
+                var el = document.getElementById("regNo");
+                if(el) {{
+                    // 先去掉可能触发弹窗的事件
+                    el.onclick = null;
+                    el.onfocus = null;
+                    el.removeAttribute("onclick");
+                    el.removeAttribute("onfocus");
+                    // 直接设值
+                    el.value = "{reg_no}";
+                    el.dispatchEvent(new Event("input", {{bubbles:true}}));
+                    el.dispatchEvent(new Event("change", {{bubbles:true}}));
+                    el.dispatchEvent(new Event("blur", {{bubbles:true}}));
+                }}
+            }}''')
+            actual = page.evaluate('() => document.getElementById("regNo") ? document.getElementById("regNo").value : ""')
+            logger.info(f"注册号JS填入: 期望={reg_no[:8]}... 实际={actual[:8] if actual else 'EMPTY'}...")
 
             # 等待页面自动加载联络员信息
             time.sleep(3)

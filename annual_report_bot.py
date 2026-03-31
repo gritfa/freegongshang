@@ -539,11 +539,11 @@ class AnnualReportBot:
                 pass
             time.sleep(0.5)
 
-            # 图形验证码
+            # 图形验证码（登录页用 verifyTxCode，不是联络员变更页的 verifyCodetw）
             if not self.solve_captcha_with_retry(
                 page,
                 'img#vimg',
-                'input#verifyCodetw'
+                'input#verifyTxCode'
             ):
                 return False
 
@@ -569,22 +569,22 @@ class AnnualReportBot:
             if not sms_code:
                 return False
 
-            # 填入短信验证码 — 先用type()，失败用JS
+            # 填入短信验证码（登录页用 vcode，不是联络员变更页的 verifyCode）
             logger.info(f"登录页: 准备填入短信验证码: {sms_code}")
             try:
-                page.click('input#verifyCode')
+                page.click('input#vcode')
                 time.sleep(0.3)
-                page.fill('input#verifyCode', '')
-                page.type('input#verifyCode', sms_code, delay=50)
-                actual = page.input_value('input#verifyCode')
+                page.fill('input#vcode', '')
+                page.type('input#vcode', sms_code, delay=50)
+                actual = page.input_value('input#vcode')
                 logger.info(f"登录页短信验证码type填入: 期望={sms_code} 实际={actual}")
                 if actual != sms_code:
                     raise Exception("值不一致")
             except Exception as e:
                 logger.warning(f"登录页短信验证码type失败({e})，用JS填入")
                 page.evaluate(f'''() => {{
-                    var el = document.getElementById("verifyCode");
-                    if (!el) {{ var inputs = document.querySelectorAll("input"); for (var i=0;i<inputs.length;i++) {{ if(inputs[i].name=="verifyCode") {{ el=inputs[i]; break; }} }} }}
+                    var el = document.getElementById("vcode");
+                    if (!el) {{ var inputs = document.querySelectorAll("input"); for (var i=0;i<inputs.length;i++) {{ if(inputs[i].name=="vcode") {{ el=inputs[i]; break; }} }} }}
                     if (el) {{ el.focus(); el.value = "{sms_code}"; el.dispatchEvent(new Event("input", {{bubbles:true}})); el.dispatchEvent(new Event("change", {{bubbles:true}})); }}
                 }}''')
                 logger.info("登录页短信验证码JS填入完成")

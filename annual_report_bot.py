@@ -398,13 +398,17 @@ class AnnualReportBot:
 
             self.take_screenshot(change_page, f"change_liaison_{reg_no}")
 
-            if change_page.locator('text=成功').count() > 0 or change_page.locator('text=变更成功').count() > 0:
-                logger.info(f"联络员变更成功: {reg_no}")
+            # 页面跳转了就说明保存成功（跳回登录页）
+            current_url = change_page.url
+            page_text = change_page.inner_text("body")
+            if ("成功" in page_text or "变更成功" in page_text or
+                "联络员登录" in page_text or "liaisonsLogin" in current_url or
+                current_url != config.CHANGE_LIAISON_URL):
+                logger.info(f"联络员变更成功（页面已跳转）: {reg_no}")
                 if change_page != page:
                     change_page.close()
                 return True
             else:
-                page_text = change_page.inner_text("body")
                 logger.warning(f"联络员变更结果不确定: {page_text[:200]}")
                 if change_page != page:
                     change_page.close()

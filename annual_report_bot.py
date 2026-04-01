@@ -1351,38 +1351,55 @@ class AnnualReportBot:
                 }}''')
                 logger.info("登录页短信验证码JS填入完成")
 
-            # 点击登录按钮 — "点击登陆"是<a>标签
+            # 点击登录按钮 — <a id="EleLicLoginBtn" href="javascript:logindz()">
             logger.info("登录页: 点击登录按钮")
             login_clicked = False
 
-            # 方式1：用文字匹配<a>标签"点击登陆"
-            for selector in ['a:has-text("点击登陆")', 'a:has-text("点击登录")', 'a:has-text("登陆")', 'a:has-text("登录")']:
+            # 方式1：遍历所有frame，找到logindz函数并调用（与获取验证码按钮相同策略）
+            for frame in page.frames:
                 try:
-                    btn = captcha_page.locator(selector).first
-                    if btn.count() > 0:
-                        btn.click(timeout=5000)
+                    has_func = frame.evaluate('typeof logindz === "function"')
+                    if has_func:
+                        frame_url = frame.url
+                        logger.info(f"找到logindz函数所在frame: {frame_url}")
+                        frame.evaluate('logindz()')
                         login_clicked = True
-                        logger.info(f"登录按钮点击成功: {selector}")
+                        logger.info("登录按钮: logindz()调用成功")
                         break
-                except Exception:
+                except Exception as e:
                     pass
 
-            # 方式2：JS精确查找"点击登陆"链接
+            # 方式2：通过id点击EleLicLoginBtn
             if not login_clicked:
-                js_result = captcha_page.evaluate('''() => {
-                    var links = document.querySelectorAll("a");
-                    for (var i = 0; i < links.length; i++) {
-                        var txt = (links[i].textContent || "").trim();
-                        if (txt === "点击登陆" || txt === "点击登录" || txt === "登陆" || txt === "登录") {
-                            links[i].click();
-                            return "clicked:" + txt;
-                        }
-                    }
-                    return "NOT_FOUND";
-                }''')
-                logger.info(f"登录按钮JS查找结果: {js_result}")
-                if "NOT_FOUND" not in js_result:
-                    login_clicked = True
+                for frame in page.frames:
+                    try:
+                        result = frame.evaluate('''() => {
+                            var el = document.getElementById("EleLicLoginBtn");
+                            if (el) { el.click(); return "clicked"; }
+                            return "not_found";
+                        }''')
+                        if result == "clicked":
+                            login_clicked = True
+                            logger.info("登录按钮: getElementById('EleLicLoginBtn').click()成功")
+                            break
+                    except Exception:
+                        pass
+
+            # 方式3：通过name点击
+            if not login_clicked:
+                for frame in page.frames:
+                    try:
+                        result = frame.evaluate('''() => {
+                            var els = document.getElementsByName("EleLicLoginBtn");
+                            if (els.length > 0) { els[0].click(); return "clicked"; }
+                            return "not_found";
+                        }''')
+                        if result == "clicked":
+                            login_clicked = True
+                            logger.info("登录按钮: getElementsByName('EleLicLoginBtn')点击成功")
+                            break
+                    except Exception:
+                        pass
 
             if not login_clicked:
                 logger.error("登录按钮全部方式失败！")

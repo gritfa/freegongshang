@@ -2012,7 +2012,7 @@ def main():
     bot = AnnualReportBot()
     
     # 原型测试：只处理第1家企业
-    bot.run(start_index=0, end_index=1, need_change_liaison=True)
+    bot.run(start_index=0, end_index=1, need_change_liaison=False)
 
 
 if __name__ == "__main__":

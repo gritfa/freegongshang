@@ -812,31 +812,12 @@ class AnnualReportBot:
             try:
                 time.sleep(2)
                 czybtn_closed = False
-
-                # 诊断：列出所有frame中的checkbox
-                for frame in page.frames:
-                    try:
-                        checkboxes = frame.evaluate('''() => {
-                            var cbs = document.querySelectorAll('input[type="checkbox"]');
-                            var result = [];
-                            for(var i=0; i<cbs.length; i++) {
-                                var el = cbs[i];
-                                result.push({
-                                    id: el.id, name: el.name,
-                                    checked: el.checked, visible: el.offsetParent !== null,
-                                    parentText: (el.parentElement ? el.parentElement.textContent : "").substring(0, 50)
-                                });
-                            }
-                            return result;
-                        }''')
-                        if checkboxes:
-                            logger.info(f"frame [{frame.url[:60]}] checkboxes: {checkboxes}")
-                    except Exception:
-                        continue
-
-                # 在所有frame中查找并点击所有可能的操作指引checkbox
                 candidate_ids = ["czybtn", "czzybut", "czzybtn", "czybut"]
+
+                # 在所有frame中查找操作指引checkbox，如果勾选则点击一次取消
                 for frame in page.frames:
+                    if czybtn_closed:
+                        break
                     for cid in candidate_ids:
                         try:
                             result = frame.evaluate(f'''() => {{
@@ -850,74 +831,21 @@ class AnnualReportBot:
                                 return "not_found";
                             }}''')
                             if result.startswith("clicked_"):
-                                logger.info(f"操作指引已关闭（{result}, frame: {frame.url[:60]}）")
+                                logger.info(f"操作指引已关闭（{result}）")
                                 czybtn_closed = True
                                 time.sleep(1)
                                 break
                             elif result.startswith("already_off_"):
-                                logger.info(f"操作指引已关闭状态（{result}, frame: {frame.url[:60]}）")
+                                logger.info(f"操作指引已是关闭状态（{result}）")
                                 czybtn_closed = True
                                 break
                         except Exception:
                             continue
-                    if czybtn_closed:
-                        break
 
-                # 备用：点击所有已勾选的checkbox（排除协议相关的）
                 if not czybtn_closed:
-                    for frame in page.frames:
-                        try:
-                            frame.evaluate('''() => {
-                                var cbs = document.querySelectorAll('input[type="checkbox"]');
-                                for(var i=0; i<cbs.length; i++) {
-                                    if(cbs[i].checked) {
-                                        cbs[i].click();
-                                    }
-                                }
-                            }''')
-                        except Exception:
-                            continue
-                    logger.info("操作指引: 已尝试取消所有已勾选checkbox")
-
-                # 备用：Playwright force点击
-                if not czybtn_closed:
-                    for selector in ['input#czybtn', 'input#czzybut', 'input[name="czybtn"]', 'input[name="czzybut"]']:
-                        try:
-                            el = page.locator(selector)
-                            if el.count() > 0 and el.is_checked():
-                                el.click(force=True)
-                                logger.info(f"操作指引已关闭（Playwright force click {selector}）")
-                                czybtn_closed = True
-                                time.sleep(1)
-                                break
-                        except Exception:
-                            continue
-                    if not czybtn_closed:
-                        for frame in page.frames:
-                            for selector in ['input#czybtn', 'input#czzybut', 'input[name="czybtn"]', 'input[name="czzybut"]']:
-                                try:
-                                    el = frame.locator(selector)
-                                    if el.count() > 0 and el.is_checked():
-                                        el.click(force=True)
-                                        logger.info(f"操作指引已关闭（iframe Playwright force click {selector}）")
-                                        czybtn_closed = True
-                                        time.sleep(1)
-                                        break
-                                except Exception:
-                                    continue
-                            if czybtn_closed:
-                                break
+                    logger.warning("未找到操作指引checkbox，继续执行")
             except Exception as e:
                 logger.warning(f"关闭操作指引失败: {e}，继续执行")
-
-            # 勾选协议复选框
-            try:
-                checkbox = page.locator('input#czzybut')
-                if checkbox.count() > 0 and not checkbox.is_checked():
-                    checkbox.check()
-                    logger.info("已勾选协议复选框")
-            except Exception as e:
-                logger.warning(f"勾选协议复选框失败({e})，继续")
 
             # 等待注册号输入框出现
             try:

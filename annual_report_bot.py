@@ -1296,9 +1296,7 @@ class AnnualReportBot:
                 }}''')
                 logger.info("登录页短信验证码JS填入完成")
 
-            # 点击登录按钮 — <a id="EleLicLoginBtn" href="javascript:logindz()">
-            # logindz定义在iframe作用域内，全局JS调用不到
-            # 必须用Playwright在正确的frame里做真实点击，浏览器才会执行href
+            # 点击登录按钮 — <a id="liaisonsLoginBtn" href="javascript:logindz()">
             logger.info("登录页: 点击登录按钮")
 
             # 先截图，看点击前的页面状态
@@ -1306,87 +1304,55 @@ class AnnualReportBot:
 
             login_clicked = False
 
-            # 方式1：在所有frame里找到可见的EleLicLoginBtn，用Playwright locator.click()（不带force）
-            # 不带force的click()会模拟完整鼠标事件，浏览器会处理href="javascript:..."
-            for frame in page.frames:
+            # 方式1：在hqyzm_frame（获取验证码按钮所在的frame）里用JS点击
+            hqyzm_frame = getattr(self, '_hqyzm_frame', None)
+            if hqyzm_frame:
                 try:
-                    # 先检查这个frame里有没有可见的登录按钮
-                    has_btn = frame.evaluate('''() => {
-                        var el = document.getElementById("EleLicLoginBtn");
-                        if (!el) return false;
-                        var rect = el.getBoundingClientRect();
-                        return rect.width > 0 && rect.height > 0;
+                    result = hqyzm_frame.evaluate('''() => {
+                        var el = document.getElementById("liaisonsLoginBtn");
+                        if (el) { el.click(); return "clicked_by_id"; }
+                        el = document.getElementsByName("liaisonsLoginBtn")[0];
+                        if (el) { el.click(); return "clicked_by_name"; }
+                        return "not_found";
                     }''')
-                    if not has_btn:
-                        continue
-                    logger.info(f"登录按钮找到, frame={frame.url[:80]}")
-                    # 用Playwright原生click，不带force，模拟真实鼠标行为
-                    frame.locator('#EleLicLoginBtn').click(timeout=5000)
-                    login_clicked = True
-                    logger.info("登录按钮: Playwright locator.click() 成功")
-                    break
+                    if "clicked" in result:
+                        login_clicked = True
+                        logger.info(f"登录按钮: hqyzm_frame JS click 成功 ({result})")
                 except Exception as e:
-                    logger.warning(f"登录按钮方式1在frame {frame.url[:50]} 失败: {e}")
-                    continue
+                    logger.warning(f"登录按钮方式1(hqyzm_frame)失败: {e}")
 
-            # 方式2：用page.mouse.click()坐标点击
+            # 方式2：遍历所有frame找到liaisonsLoginBtn并点击
             if not login_clicked:
-                try:
-                    btn_info = None
-                    for frame in page.frames:
-                        try:
-                            info = frame.evaluate('''() => {
-                                var el = document.getElementById("EleLicLoginBtn");
-                                if (!el) return null;
-                                var rect = el.getBoundingClientRect();
-                                if (rect.width === 0 || rect.height === 0) return null;
-                                return {cx: rect.x + rect.width/2, cy: rect.y + rect.height/2};
-                            }''')
-                            if info:
-                                btn_info = info
-                                break
-                        except Exception:
-                            continue
-
-                    if btn_info:
-                        # 获取所有iframe的偏移，找到匹配的
-                        iframe_offsets = page.evaluate('''() => {
-                            var results = [];
-                            var iframes = document.querySelectorAll("iframe");
-                            for (var i = 0; i < iframes.length; i++) {
-                                var rect = iframes[i].getBoundingClientRect();
-                                results.push({x: rect.x, y: rect.y, w: rect.width, h: rect.height, src: iframes[i].src || ''});
-                            }
-                            return results;
+                for frame in page.frames:
+                    try:
+                        result = frame.evaluate('''() => {
+                            var el = document.getElementById("liaisonsLoginBtn");
+                            if (!el) return "not_found";
+                            var rect = el.getBoundingClientRect();
+                            if (rect.width === 0 && rect.height === 0) return "hidden";
+                            el.click();
+                            return "clicked";
                         }''')
-                        logger.info(f"所有iframe偏移: {iframe_offsets}")
+                        if result == "clicked":
+                            login_clicked = True
+                            logger.info(f"登录按钮: frame JS click 成功, frame={frame.url[:80]}")
+                            break
+                    except Exception:
+                        continue
 
-                        # 用最大的可见iframe的偏移
-                        best_offset = {'x': 0, 'y': 0}
-                        for off in iframe_offsets:
-                            if off['w'] > 0 and off['h'] > 0:
-                                best_offset = off
-                                break
-
-                        abs_x = best_offset['x'] + btn_info['cx']
-                        abs_y = best_offset['y'] + btn_info['cy']
-                        logger.info(f"登录按钮绝对坐标: ({abs_x}, {abs_y})")
-                        page.mouse.click(abs_x, abs_y)
-                        login_clicked = True
-                        logger.info("登录按钮: page.mouse.click() 坐标点击完成")
-                except Exception as e:
-                    logger.warning(f"登录按钮方式2(坐标)失败: {e}")
-
-            # 方式3：在hqyzm_frame里force click
+            # 方式3：Playwright locator click
             if not login_clicked:
-                try:
-                    target_frame = getattr(self, '_hqyzm_frame', None)
-                    if target_frame:
-                        target_frame.locator('#EleLicLoginBtn').click(force=True, timeout=5000)
-                        login_clicked = True
-                        logger.info("登录按钮: hqyzm_frame force click")
-                except Exception as e:
-                    logger.debug(f"登录按钮方式3失败: {e}")
+                for frame in page.frames:
+                    try:
+                        locator = frame.locator('#liaisonsLoginBtn')
+                        if locator.count() > 0:
+                            locator.click(timeout=5000)
+                            login_clicked = True
+                            logger.info("登录按钮: Playwright locator click 成功")
+                            break
+                    except Exception as e:
+                        logger.debug(f"登录按钮方式3在frame失败: {e}")
+                        continue
 
             if not login_clicked:
                 logger.error("登录按钮全部方式失败！")

@@ -1371,8 +1371,233 @@ class AnnualReportBot:
             logger.info(f"登录后URL: {current_url}")
             logger.info(f"登录后页面前200字: {page_text[:200]}")
 
-            if "年报" in page_text or "企业基本信息" in page_text or "填报" in page_text:
+            if "年报" in page_text or "企业基本信息" in page_text or "填报" in page_text or "年度报告" in page_text or "预警" in page_text:
                 logger.info(f"登录成功: {reg_no}")
+
+                # ========== 登录后工作流：导航到年报填写页面 ==========
+
+                # --- 步骤1：处理预警提示弹窗 ---
+                logger.info("检查是否有预警提示弹窗...")
+                time.sleep(2)
+                warning_handled = False
+
+                # 在所有frame里查找预警提示弹窗
+                for frame in page.frames:
+                    try:
+                        # 查找checkbox (input#flag)
+                        flag_exists = frame.evaluate('''() => {
+                            let el = document.getElementById("flag");
+                            if (el) return {exists: true, checked: el.checked, type: el.type};
+                            return {exists: false};
+                        }''')
+
+                        if flag_exists.get('exists'):
+                            logger.info(f"找到预警提示checkbox: checked={flag_exists.get('checked')}, frame={frame.url}")
+
+                            # 勾选checkbox
+                            if not flag_exists.get('checked'):
+                                frame.evaluate('document.getElementById("flag").click()')
+                                logger.info("已勾选预警提示checkbox")
+                                time.sleep(1)
+
+                            # 点击确认按钮 (closeCommonDialog)
+                            try:
+                                frame.evaluate('closeCommonDialog()')
+                                logger.info("已点击预警提示确认按钮(closeCommonDialog)")
+                                warning_handled = True
+                            except Exception:
+                                # 尝试直接点击按钮
+                                try:
+                                    frame.evaluate('''() => {
+                                        let btns = document.querySelectorAll('input[type="button"]');
+                                        for (let btn of btns) {
+                                            if (btn.onclick && btn.onclick.toString().includes('closeCommonDialog')) {
+                                                btn.click();
+                                                return true;
+                                            }
+                                        }
+                                        // 也尝试div#queren里的按钮
+                                        let queren = document.getElementById("queren");
+                                        if (queren) {
+                                            let btn = queren.querySelector('input[type="button"]');
+                                            if (btn) { btn.click(); return true; }
+                                        }
+                                        return false;
+                                    }''')
+                                    logger.info("已通过按钮元素点击确认")
+                                    warning_handled = True
+                                except Exception as e:
+                                    logger.warning(f"点击预警确认按钮失败: {e}")
+
+                            break
+                    except Exception as e:
+                        continue
+
+                if warning_handled:
+                    logger.info("预警提示弹窗已处理")
+                    time.sleep(2)
+                else:
+                    logger.info("未发现预警提示弹窗，跳过")
+
+                self.take_screenshot(page, f"after_warning_{reg_no}")
+
+                # --- 步骤2：点击"年度报告填写"图标 ---
+                logger.info("查找并点击'年度报告填写'图标...")
+                report_clicked = False
+
+                for frame in page.frames:
+                    try:
+                        # 尝试通过文字查找链接
+                        result = frame.evaluate('''() => {
+                            // 查找包含"年度报告填写"或"年报报告填写"文字的链接
+                            let links = document.querySelectorAll('a');
+                            for (let a of links) {
+                                if (a.textContent.includes('年度报告填') || a.textContent.includes('年报报告填')) {
+                                    a.click();
+                                    return {clicked: true, text: a.textContent.trim(), href: a.href};
+                                }
+                            }
+                            // 也查找包含该文字的其他可点击元素
+                            let all = document.querySelectorAll('a, div, span, td, li');
+                            for (let el of all) {
+                                if (el.textContent.trim() === '年度报告填写' || el.textContent.trim() === '年报报告填写') {
+                                    el.click();
+                                    return {clicked: true, text: el.textContent.trim(), tag: el.tagName};
+                                }
+                            }
+                            return {clicked: false};
+                        }''')
+
+                        if result.get('clicked'):
+                            logger.info(f"已点击'年度报告填写': {result}")
+                            report_clicked = True
+                            break
+                    except Exception as e:
+                        continue
+
+                # 备用：尝试用Playwright locator
+                if not report_clicked:
+                    for frame in page.frames:
+                        try:
+                            locator = frame.locator('a:has-text("年度报告填")')
+                            if locator.count() > 0:
+                                locator.first.click(timeout=5000)
+                                logger.info("已通过Playwright locator点击'年度报告填写'")
+                                report_clicked = True
+                                break
+                        except Exception:
+                            continue
+
+                if not report_clicked:
+                    # 尝试通过href包含"ann"或"report"的链接
+                    for frame in page.frames:
+                        try:
+                            result = frame.evaluate('''() => {
+                                let links = document.querySelectorAll('a');
+                                let found = [];
+                                for (let a of links) {
+                                    found.push({text: a.textContent.trim().substring(0, 30), href: a.href, onclick: a.getAttribute('onclick')});
+                                }
+                                return found;
+                            }''')
+                            if result:
+                                logger.info(f"frame {frame.url} 所有链接: {result[:10]}")
+                        except Exception:
+                            continue
+
+                if report_clicked:
+                    time.sleep(3)
+                    self.take_screenshot(page, f"after_click_report_{reg_no}")
+                else:
+                    logger.warning("未找到'年度报告填写'按钮")
+                    self.take_screenshot(page, f"no_report_btn_{reg_no}")
+
+                # --- 步骤3：选择年度报告年份并确认 ---
+                logger.info("查找年度报告年份选择弹窗...")
+                time.sleep(2)
+                year_selected = False
+
+                for frame in page.frames:
+                    try:
+                        # 查找select下拉菜单
+                        result = frame.evaluate('''() => {
+                            let selects = document.querySelectorAll('select');
+                            for (let sel of selects) {
+                                // 遍历option查找2025
+                                let options = [];
+                                for (let opt of sel.options) {
+                                    options.push({value: opt.value, text: opt.text});
+                                }
+                                return {found: true, id: sel.id, name: sel.name, options: options};
+                            }
+                            return {found: false};
+                        }''')
+
+                        if result.get('found'):
+                            logger.info(f"找到下拉菜单: id={result.get('id')}, options={result.get('options')}")
+
+                            # 选择2025年度
+                            sel_id = result.get('id') or result.get('name')
+                            frame.evaluate('''(selId) => {
+                                let sel = document.getElementById(selId) || document.getElementsByName(selId)[0] || document.querySelector('select');
+                                if (sel) {
+                                    for (let opt of sel.options) {
+                                        if (opt.text.includes('2025') || opt.value.includes('2025')) {
+                                            sel.value = opt.value;
+                                            // 触发change事件
+                                            sel.dispatchEvent(new Event('change', {bubbles: true}));
+                                            return true;
+                                        }
+                                    }
+                                    // 如果没有2025，选最新的非"请选择"选项
+                                    for (let i = sel.options.length - 1; i >= 0; i--) {
+                                        if (sel.options[i].value && sel.options[i].text !== '请选择') {
+                                            sel.value = sel.options[i].value;
+                                            sel.dispatchEvent(new Event('change', {bubbles: true}));
+                                            return true;
+                                        }
+                                    }
+                                }
+                                return false;
+                            }''', sel_id)
+                            logger.info("已选择2025年度报告")
+                            time.sleep(1)
+
+                            # 点击确定按钮
+                            try:
+                                confirm_result = frame.evaluate('''() => {
+                                    // 查找确定按钮
+                                    let btns = document.querySelectorAll('input[type="button"], button, a');
+                                    for (let btn of btns) {
+                                        let text = btn.textContent || btn.value || '';
+                                        if (text.includes('确定') || text.includes('确认')) {
+                                            btn.click();
+                                            return {clicked: true, text: text.trim()};
+                                        }
+                                    }
+                                    return {clicked: false};
+                                }''')
+
+                                if confirm_result.get('clicked'):
+                                    logger.info(f"已点击确定按钮: {confirm_result}")
+                                    year_selected = True
+                                else:
+                                    logger.warning("未找到确定按钮")
+                            except Exception as e:
+                                logger.warning(f"点击确定按钮失败: {e}")
+
+                            break
+                    except Exception as e:
+                        continue
+
+                if year_selected:
+                    logger.info("已选择年度报告并确认，等待进入填报页面...")
+                    time.sleep(5)
+                    self.take_screenshot(page, f"enter_fill_page_{reg_no}")
+                else:
+                    logger.warning("年度报告选择可能未成功")
+                    self.take_screenshot(page, f"year_select_fail_{reg_no}")
+
                 return True
             else:
                 logger.warning(f"登录可能失败: {reg_no}, 页面内容前100字: {page_text[:100]}")

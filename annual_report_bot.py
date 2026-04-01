@@ -994,88 +994,152 @@ class AnnualReportBot:
                 except Exception:
                     continue
 
-            # 方法1: Playwright真实鼠标点击（模拟人工点击，不触发二次验证弹窗）
-            # 优先使用Playwright的.click()，因为它会触发完整的鼠标事件链(mousedown/mouseup/click)
-            # JS evaluate调用函数会被网站检测为非人工操作，导致弹出二次验证
-            selectors = [
-                'a[name="butn"]', 'a:has-text("获取验证码")',
-                'text=获取验证码', '[onclick*="hyzm"]', '[onclick*="getCode"]',
-                'a#butn', '[onclick*="sendSms"]', '[onclick*="Code"]'
-            ]
-            # 先在captcha_page（iframe）里尝试
-            for sel in selectors:
+            # 先截图保存当前页面状态，用于调试
+            try:
+                page.screenshot(path="debug_before_click_sms.png")
+                logger.info("已保存点击前截图: debug_before_click_sms.png")
+            except Exception:
+                pass
+
+            # 先用JS在所有frame里查找"获取验证码"按钮的精确信息
+            btn_found_frame = None
+            btn_box = None
+            for frame in page.frames:
                 try:
-                    el = captcha_page.locator(sel)
-                    if el.count() > 0:
-                        el.first.scroll_into_view_if_needed(timeout=3000)
-                        el.first.click(timeout=5000)
-                        logger.info(f"登录页获取验证码: Playwright真实点击 '{sel}' 成功(captcha_page)")
-                        sms_btn_clicked = True
+                    info = frame.evaluate('''() => {
+                        // 查找name=butn的元素
+                        var el = document.getElementsByName("butn");
+                        if(el.length > 0) {
+                            var btn = el[0];
+                            var rect = btn.getBoundingClientRect();
+                            return {
+                                found: true, method: 'name_butn',
+                                tag: btn.tagName, text: btn.textContent.trim(),
+                                onclick: btn.getAttribute('onclick') || '',
+                                visible: btn.offsetParent !== null,
+                                display: getComputedStyle(btn).display,
+                                x: rect.x, y: rect.y, w: rect.width, h: rect.height,
+                                centerX: rect.x + rect.width/2,
+                                centerY: rect.y + rect.height/2
+                            };
+                        }
+                        // 查找包含"获取验证码"文字的链接
+                        var links = document.querySelectorAll('a');
+                        for(var i=0; i<links.length; i++) {
+                            if(links[i].textContent && links[i].textContent.includes("获取验证码")) {
+                                var rect = links[i].getBoundingClientRect();
+                                return {
+                                    found: true, method: 'text_match',
+                                    tag: links[i].tagName, text: links[i].textContent.trim(),
+                                    onclick: links[i].getAttribute('onclick') || '',
+                                    visible: links[i].offsetParent !== null,
+                                    display: getComputedStyle(links[i]).display,
+                                    x: rect.x, y: rect.y, w: rect.width, h: rect.height,
+                                    centerX: rect.x + rect.width/2,
+                                    centerY: rect.y + rect.height/2
+                                };
+                            }
+                        }
+                        return {found: false};
+                    }''')
+                    if info.get('found'):
+                        logger.info(f"找到获取验证码按钮! frame={frame.url[:60]}, info={json.dumps(info, ensure_ascii=False)}")
+                        btn_found_frame = frame
+                        btn_box = info
                         break
-                except Exception as e:
-                    logger.debug(f"Playwright点击 '{sel}' captcha_page失败: {e}")
+                except Exception:
+                    continue
 
-            # 再在page（主页面）里尝试
-            if not sms_btn_clicked and captcha_page != page:
-                for sel in selectors:
-                    try:
-                        el = page.locator(sel)
-                        if el.count() > 0:
-                            el.first.scroll_into_view_if_needed(timeout=3000)
-                            el.first.click(timeout=5000)
-                            logger.info(f"登录页获取验证码: Playwright真实点击 '{sel}' 成功(page)")
+            if btn_box:
+                cx = btn_box.get('centerX', 0)
+                cy = btn_box.get('centerY', 0)
+                logger.info(f"按钮坐标: centerX={cx}, centerY={cy}, visible={btn_box.get('visible')}")
+
+                # 方法1: 用Playwright的mouse在iframe内坐标点击（最接近人工操作）
+                try:
+                    # 如果按钮在iframe里，需要获取iframe在主页面的偏移量
+                    if btn_found_frame != page and btn_found_frame.url != page.url:
+                        # 获取iframe元素在主页面中的位置
+                        iframe_offset = page.evaluate('''() => {
+                            var iframes = document.querySelectorAll('iframe');
+                            for(var i=0; i<iframes.length; i++) {
+                                var rect = iframes[i].getBoundingClientRect();
+                                if(rect.width > 0 && rect.height > 0) {
+                                    return {x: rect.x, y: rect.y, found: true, src: iframes[i].src};
+                                }
+                            }
+                            return {x: 0, y: 0, found: false};
+                        }''')
+                        if iframe_offset.get('found'):
+                            abs_x = iframe_offset['x'] + cx
+                            abs_y = iframe_offset['y'] + cy
+                            logger.info(f"iframe偏移: x={iframe_offset['x']}, y={iframe_offset['y']}, 绝对坐标: ({abs_x}, {abs_y})")
+                            page.mouse.click(abs_x, abs_y)
+                            logger.info(f"鼠标坐标点击成功: ({abs_x}, {abs_y})")
                             sms_btn_clicked = True
-                            break
+                        else:
+                            logger.warning("未找到iframe位置，尝试直接在frame内坐标点击")
+
+                    if not sms_btn_clicked:
+                        # 直接在主页面坐标点击
+                        page.mouse.click(cx, cy)
+                        logger.info(f"主页面鼠标坐标点击: ({cx}, {cy})")
+                        sms_btn_clicked = True
+                except Exception as e:
+                    logger.warning(f"鼠标坐标点击失败: {e}")
+
+                # 方法2: 如果坐标点击没用，用Playwright locator点击
+                if not sms_btn_clicked:
+                    try:
+                        btn_found_frame.locator('a[name="butn"]').first.click(force=True, timeout=5000)
+                        logger.info("Playwright force点击 a[name=butn] 成功")
+                        sms_btn_clicked = True
                     except Exception as e:
-                        logger.debug(f"Playwright点击 '{sel}' page失败: {e}")
+                        logger.debug(f"Playwright force点击失败: {e}")
 
-            # 方法2: 遍历所有frame用Playwright FrameLocator点击
-            if not sms_btn_clicked:
-                for frame in page.frames:
-                    for sel in ['a[name="butn"]', 'a:has-text("获取验证码")', 'text=获取验证码']:
-                        try:
-                            el = frame.locator(sel)
-                            if el.count() > 0:
-                                el.first.click(timeout=5000)
-                                logger.info(f"登录页获取验证码: frame点击 '{sel}' 成功(frame: {frame.url[:60]})")
-                                sms_btn_clicked = True
-                                break
-                        except Exception:
-                            continue
-                    if sms_btn_clicked:
-                        break
+                if not sms_btn_clicked:
+                    try:
+                        btn_found_frame.locator('a:has-text("获取验证码")').first.click(force=True, timeout=5000)
+                        logger.info("Playwright force点击 获取验证码 成功")
+                        sms_btn_clicked = True
+                    except Exception as e:
+                        logger.debug(f"Playwright force点击文本匹配失败: {e}")
+            else:
+                logger.error("所有frame中都没有找到获取验证码按钮！")
 
-            # 方法3（最后备用）: JS dispatchEvent模拟鼠标事件，比直接调用函数更接近真实点击
+            # 方法3（最后备用）: 遍历所有frame用JS click
             if not sms_btn_clicked:
                 for frame in page.frames:
                     try:
                         result = frame.evaluate('''() => {
                             var el = document.getElementsByName("butn");
-                            if(el.length > 0) {
-                                var btn = el[0];
-                                var evt = new MouseEvent('click', {bubbles: true, cancelable: true, view: window});
-                                btn.dispatchEvent(evt);
-                                return true;
-                            }
+                            if(el.length > 0) { el[0].click(); return "name_butn"; }
                             var links = document.querySelectorAll('a');
                             for(var i=0; i<links.length; i++) {
                                 if(links[i].textContent && links[i].textContent.includes("获取验证码")) {
-                                    var evt = new MouseEvent('click', {bubbles: true, cancelable: true, view: window});
-                                    links[i].dispatchEvent(evt);
-                                    return true;
+                                    links[i].click();
+                                    return "text_match";
                                 }
                             }
                             return false;
                         }''')
                         if result:
-                            logger.info(f"登录页获取验证码: JS dispatchEvent成功(frame: {frame.url[:60]})")
+                            logger.info(f"JS .click() 成功: {result} (frame: {frame.url[:60]})")
                             sms_btn_clicked = True
                             break
                     except Exception:
                         continue
 
             if not sms_btn_clicked:
-                logger.error("所有获取验证码方法都失败了！请检查按钮诊断日志")
+                logger.error("所有获取验证码方法都失败了！")
+
+            # 点击后截图，确认按钮状态
+            time.sleep(2)
+            try:
+                page.screenshot(path="debug_after_click_sms.png")
+                logger.info("已保存点击后截图: debug_after_click_sms.png")
+            except Exception:
+                pass
             time.sleep(2)
 
             # 处理二次验证弹窗（点击获取验证码后可能弹出图片验证码确认框）

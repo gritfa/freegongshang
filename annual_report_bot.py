@@ -1879,26 +1879,25 @@ class AnnualReportBot:
             active_page = self.change_liaison(page, enterprise)
             if active_page:
                 result["联络员变更"] = "成功"
-                # 变更完成后关闭所有页面，创建全新页面重新登录
-                logger.info("联络员变更完成，关闭所有页面，创建新页面重新登录")
+                # 变更完成后关闭多余标签页，用原始page重新导航
+                logger.info("联络员变更完成，准备重新进入登录页")
                 try:
                     context = page.context
-                    # 关闭所有标签页
-                    for p in context.pages:
-                        try:
-                            p.close()
-                        except Exception:
-                            pass
-                    # 清除cookies，避免旧session影响新登录页的验证码校验
-                    context.clear_cookies()
-                    logger.info("已清除浏览器cookies")
-                    # 创建全新的页面
-                    page = context.new_page()
+                    # 关闭除第一个以外的多余标签页
+                    pages = context.pages
+                    if len(pages) > 1:
+                        for p in pages[1:]:
+                            try:
+                                p.close()
+                            except Exception:
+                                pass
+                        page = context.pages[0]
+                    # 直接导航到登录页（不清除cookies）
                     page.goto(config.LOGIN_URL, wait_until="domcontentloaded")
-                    time.sleep(5)
-                    logger.info(f"新页面已创建，URL: {page.url}")
+                    time.sleep(3)
+                    logger.info(f"已重新导航到登录页，URL: {page.url}")
                 except Exception as e:
-                    logger.warning(f"创建新页面异常: {e}")
+                    logger.warning(f"重新导航异常: {e}")
             else:
                 result["联络员变更"] = "失败"
                 logger.error(f"联络员变更失败，跳过此企业: {reg_no}")

@@ -1297,6 +1297,9 @@ class AnnualReportBot:
                 logger.info("登录页短信验证码JS填入完成")
 
             # 点击登录按钮 — <a id="EleLicLoginBtn" href="javascript:logindz()">
+            # 注意：登录按钮用的是 href="javascript:logindz()"，不是 onclick
+            # el.click() 对 <a href="javascript:..."> 不会执行href里的JS
+            # 必须直接调用 logindz() 函数，或者用 eval(href) 的方式
             logger.info("登录页: 点击登录按钮")
 
             # 先截图，看点击前的页面状态
@@ -1304,83 +1307,44 @@ class AnnualReportBot:
 
             login_clicked = False
 
-            # 方式1：在hqyzm_frame（获取验证码所在的正确frame）里用el.click()点击按钮
-            # 跟获取验证码按钮一样，不能用evaluate('logindz()')直接调函数，会被网站检测
-            # 必须用el.click()模拟真实点击
-            if hasattr(self, '_hqyzm_frame') and self._hqyzm_frame:
+            # 方式1：遍历所有frame，找到logindz函数并直接调用
+            # （跟获取验证码按钮不同，登录按钮用href而不是onclick，el.click()无效）
+            target_frame = getattr(self, '_hqyzm_frame', None)
+            frames_to_try = ([target_frame] if target_frame else []) + list(page.frames)
+            for frame in frames_to_try:
                 try:
-                    result = self._hqyzm_frame.evaluate('''() => {
+                    result = frame.evaluate('''() => {
                         var el = document.getElementById("EleLicLoginBtn");
                         if (!el) el = document.getElementsByName("EleLicLoginBtn")[0];
                         if (el) {
-                            el.click();
-                            return "clicked_" + el.id + "_" + el.name;
+                            // 提取href里的javascript代码并执行
+                            var href = el.getAttribute("href") || "";
+                            if (href.startsWith("javascript:")) {
+                                var code = href.substring("javascript:".length);
+                                eval(code);
+                                return "eval_href_" + code;
+                            }
+                            // 如果有onclick，用onclick
+                            var onclick = el.getAttribute("onclick");
+                            if (onclick) {
+                                eval(onclick);
+                                return "eval_onclick_" + onclick;
+                            }
+                            return "no_handler";
                         }
                         return "not_found";
                     }''')
-                    if result.startswith("clicked"):
+                    if result.startswith("eval_"):
                         login_clicked = True
-                        logger.info(f"登录按钮: hqyzm_frame el.click() {result}")
+                        logger.info(f"登录按钮: {result}, frame={frame.url[:80]}")
+                        break
+                    elif result != "not_found":
+                        logger.info(f"登录按钮: {result}, frame={frame.url[:80]}")
                 except Exception as e:
-                    logger.warning(f"hqyzm_frame点击登录按钮失败: {e}")
+                    logger.debug(f"登录按钮frame尝试失败: {e}")
 
-            # 方式2：遍历所有frame，用el.click()点击可见的EleLicLoginBtn
+            # 方式2：直接调用logindz()函数
             if not login_clicked:
-                for frame in page.frames:
-                    try:
-                        result = frame.evaluate('''() => {
-                            var el = document.getElementById("EleLicLoginBtn");
-                            if (!el) el = document.getElementsByName("EleLicLoginBtn")[0];
-                            if (el) {
-                                var rect = el.getBoundingClientRect();
-                                if (rect.width > 0 && rect.height > 0) {
-                                    el.click();
-                                    return "clicked_visible_" + el.id;
-                                }
-                                return "found_but_hidden_" + rect.width + "x" + rect.height;
-                            }
-                            return "not_found";
-                        }''')
-                        if result.startswith("clicked"):
-                            login_clicked = True
-                            logger.info(f"登录按钮: frame el.click() {result}, frame={frame.url[:80]}")
-                            break
-                        elif result.startswith("found"):
-                            logger.info(f"登录按钮: {result}, frame={frame.url[:80]}")
-                    except Exception:
-                        pass
-
-            # 方式3：在正确的frame里用dispatchEvent模拟完整鼠标事件
-            if not login_clicked:
-                target_frame = getattr(self, '_hqyzm_frame', None)
-                frames_to_try = ([target_frame] if target_frame else []) + list(page.frames)
-                for frame in frames_to_try:
-                    try:
-                        result = frame.evaluate('''() => {
-                            var el = document.getElementById("EleLicLoginBtn");
-                            if (!el) el = document.getElementsByName("EleLicLoginBtn")[0];
-                            if (el) {
-                                var rect = el.getBoundingClientRect();
-                                var cx = rect.left + rect.width / 2;
-                                var cy = rect.top + rect.height / 2;
-                                el.dispatchEvent(new MouseEvent("mousedown", {bubbles:true, clientX:cx, clientY:cy}));
-                                el.dispatchEvent(new MouseEvent("mouseup", {bubbles:true, clientX:cx, clientY:cy}));
-                                el.dispatchEvent(new MouseEvent("click", {bubbles:true, clientX:cx, clientY:cy}));
-                                return "dispatched_" + el.id;
-                            }
-                            return "not_found";
-                        }''')
-                        if result.startswith("dispatched"):
-                            login_clicked = True
-                            logger.info(f"登录按钮: dispatchEvent {result}")
-                            break
-                    except Exception:
-                        pass
-
-            # 方式4：直接用href的javascript:logindz()调用（最后备用）
-            if not login_clicked:
-                target_frame = getattr(self, '_hqyzm_frame', None)
-                frames_to_try = ([target_frame] if target_frame else []) + list(page.frames)
                 for frame in frames_to_try:
                     try:
                         has_func = frame.evaluate('typeof logindz === "function"')

@@ -1051,82 +1051,77 @@ class AnnualReportBot:
                     continue
 
             if btn_box:
-                cx = btn_box.get('centerX', 0)
-                cy = btn_box.get('centerY', 0)
-                logger.info(f"按钮坐标: centerX={cx}, centerY={cy}, visible={btn_box.get('visible')}")
+                logger.info(f"按钮信息: onclick={btn_box.get('onclick')}, visible={btn_box.get('visible')}, frame={btn_found_frame.url[:80]}")
 
-                # 方法1: 用Playwright的mouse在iframe内坐标点击（最接近人工操作）
+                # 方法1: Playwright locator 真实点击（最可靠，模拟完整鼠标事件）
                 try:
-                    # 如果按钮在iframe里，需要获取iframe在主页面的偏移量
-                    if btn_found_frame != page and btn_found_frame.url != page.url:
-                        # 获取iframe元素在主页面中的位置
-                        iframe_offset = page.evaluate('''() => {
-                            var iframes = document.querySelectorAll('iframe');
-                            for(var i=0; i<iframes.length; i++) {
-                                var rect = iframes[i].getBoundingClientRect();
-                                if(rect.width > 0 && rect.height > 0) {
-                                    return {x: rect.x, y: rect.y, found: true, src: iframes[i].src};
-                                }
-                            }
-                            return {x: 0, y: 0, found: false};
-                        }''')
-                        if iframe_offset.get('found'):
-                            abs_x = iframe_offset['x'] + cx
-                            abs_y = iframe_offset['y'] + cy
-                            logger.info(f"iframe偏移: x={iframe_offset['x']}, y={iframe_offset['y']}, 绝对坐标: ({abs_x}, {abs_y})")
-                            page.mouse.click(abs_x, abs_y)
-                            logger.info(f"鼠标坐标点击成功: ({abs_x}, {abs_y})")
-                            sms_btn_clicked = True
-                        else:
-                            logger.warning("未找到iframe位置，尝试直接在frame内坐标点击")
-
-                    if not sms_btn_clicked:
-                        # 直接在主页面坐标点击
-                        page.mouse.click(cx, cy)
-                        logger.info(f"主页面鼠标坐标点击: ({cx}, {cy})")
-                        sms_btn_clicked = True
+                    btn_found_frame.locator('a[name="butn"]').first.click(timeout=5000)
+                    logger.info("方法1成功: Playwright点击 a[name=butn]")
+                    sms_btn_clicked = True
                 except Exception as e:
-                    logger.warning(f"鼠标坐标点击失败: {e}")
+                    logger.warning(f"方法1失败(a[name=butn]): {e}")
 
-                # 方法2: 如果坐标点击没用，用Playwright locator点击
+                # 方法2: 用文本匹配点击
+                if not sms_btn_clicked:
+                    try:
+                        btn_found_frame.locator('a:has-text("获取验证码")').first.click(timeout=5000)
+                        logger.info("方法2成功: Playwright点击 '获取验证码'")
+                        sms_btn_clicked = True
+                    except Exception as e:
+                        logger.warning(f"方法2失败(文本匹配): {e}")
+
+                # 方法3: force=True 强制点击（绕过遮罩层）
                 if not sms_btn_clicked:
                     try:
                         btn_found_frame.locator('a[name="butn"]').first.click(force=True, timeout=5000)
-                        logger.info("Playwright force点击 a[name=butn] 成功")
+                        logger.info("方法3成功: Playwright force点击 a[name=butn]")
                         sms_btn_clicked = True
                     except Exception as e:
-                        logger.debug(f"Playwright force点击失败: {e}")
+                        logger.warning(f"方法3失败(force点击): {e}")
 
+                # 方法4: JS dispatchEvent 模拟完整鼠标事件（比直接调函数更真实）
                 if not sms_btn_clicked:
                     try:
-                        btn_found_frame.locator('a:has-text("获取验证码")').first.click(force=True, timeout=5000)
-                        logger.info("Playwright force点击 获取验证码 成功")
-                        sms_btn_clicked = True
-                    except Exception as e:
-                        logger.debug(f"Playwright force点击文本匹配失败: {e}")
-            else:
-                logger.error("所有frame中都没有找到获取验证码按钮！")
-
-            # 方法3（最后备用）: 遍历所有frame用JS click
-            if not sms_btn_clicked:
-                for frame in page.frames:
-                    try:
-                        result = frame.evaluate('''() => {
+                        btn_found_frame.evaluate('''() => {
                             var el = document.getElementsByName("butn");
-                            if(el.length > 0) { el[0].click(); return "name_butn"; }
-                            var links = document.querySelectorAll('a');
-                            for(var i=0; i<links.length; i++) {
-                                if(links[i].textContent && links[i].textContent.includes("获取验证码")) {
-                                    links[i].click();
-                                    return "text_match";
-                                }
+                            if(el.length > 0) {
+                                var btn = el[0];
+                                var events = ['mousedown', 'mouseup', 'click'];
+                                events.forEach(function(evtName) {
+                                    var evt = new MouseEvent(evtName, {bubbles: true, cancelable: true, view: window});
+                                    btn.dispatchEvent(evt);
+                                });
+                                return true;
                             }
                             return false;
                         }''')
-                        if result:
-                            logger.info(f"JS .click() 成功: {result} (frame: {frame.url[:60]})")
+                        logger.info("方法4成功: JS dispatchEvent 模拟鼠标事件")
+                        sms_btn_clicked = True
+                    except Exception as e:
+                        logger.warning(f"方法4失败(dispatchEvent): {e}")
+
+                # 方法5: 直接调用onclick函数 hqyzm()
+                if not sms_btn_clicked:
+                    for func_name in ['hqyzm()', 'hyzm()', 'getCode2()', 'getCode()']:
+                        try:
+                            btn_found_frame.evaluate(func_name)
+                            logger.info(f"方法5成功: JS {func_name}")
                             sms_btn_clicked = True
                             break
+                        except Exception:
+                            continue
+
+            else:
+                logger.error("所有frame中都没有找到获取验证码按钮！")
+
+            # 方法6（兜底）: 遍历所有frame尝试点击
+            if not sms_btn_clicked:
+                for frame in page.frames:
+                    try:
+                        frame.locator('a[name="butn"]').first.click(force=True, timeout=3000)
+                        logger.info(f"方法6成功: 遍历frame点击 (frame: {frame.url[:60]})")
+                        sms_btn_clicked = True
+                        break
                     except Exception:
                         continue
 

@@ -1001,130 +1001,158 @@ class AnnualReportBot:
             except Exception:
                 pass
 
-            # 直接在captcha_page（verifyTxCode所在的iframe）里点击获取验证码按钮
-            # 之前遍历page.frames找到了错误的同名空元素，导致点击无效
-            # captcha_page就是正确的iframe，按钮也在这里面
+            # 先确认captcha_page指向哪个frame
+            logger.info(f"captcha_page URL: {captcha_page.url[:80]}")
 
-            # 方法1: 在captcha_page里用JS .click()（用户在控制台手动验证过这个方法能用）
-            try:
-                result = captcha_page.evaluate('''() => {
-                    var el = document.getElementsByName("butn");
-                    if(el.length > 0) {
-                        for(var i=0; i<el.length; i++) {
-                            if(el[i].textContent && el[i].textContent.trim().length > 0) {
-                                el[i].click();
-                                return {success: true, text: el[i].textContent.trim(), index: i, onclick: el[i].getAttribute('onclick') || ''};
-                            }
-                        }
-                        // 如果都没有文字，点击第一个
-                        el[0].click();
-                        return {success: true, text: '', index: 0, onclick: el[0].getAttribute('onclick') || '', note: '无文字元素'};
-                    }
-                    return {success: false, reason: "captcha_page中未找到name=butn元素"};
-                }''')
-                if result.get('success'):
-                    logger.info(f"方法1成功: captcha_page JS .click() on butn, text={result.get('text')}, onclick={result.get('onclick')}")
-                    if result.get('text') or 'hqyzm' in (result.get('onclick') or ''):
-                        sms_btn_clicked = True
-                        if not result.get('text'):
-                            logger.info("方法1: 按钮文字为空但onclick包含hqyzm，信任此次点击")
-                    else:
-                        logger.warning("方法1: 按钮文字为空，可能点到了错误元素，继续尝试其他方法")
-                else:
-                    logger.warning(f"方法1失败: {result.get('reason')}")
-            except Exception as e:
-                logger.warning(f"方法1异常: {e}")
+            # 核心策略：找到定义了hqyzm函数的frame，在那里调用
+            # 之前.click()报告成功但实际没触发，可能是因为hqyzm()定义在其他frame
+            hqyzm_frame = None
+            for frame in page.frames:
+                try:
+                    has_func = frame.evaluate('() => typeof hqyzm === "function"')
+                    if has_func:
+                        logger.info(f"找到hqyzm函数所在frame: {frame.url[:80]}")
+                        hqyzm_frame = frame
+                        break
+                except Exception:
+                    continue
 
-            # 方法2: 在captcha_page里按文字"获取验证码"查找并点击
+            if not hqyzm_frame:
+                logger.warning("所有frame中都没找到hqyzm函数，尝试查找hyzm/getCode2/getCode...")
+                for func_name in ['hyzm', 'getCode2', 'getCode']:
+                    for frame in page.frames:
+                        try:
+                            has_func = frame.evaluate(f'() => typeof {func_name} === "function"')
+                            if has_func:
+                                logger.info(f"找到{func_name}函数所在frame: {frame.url[:80]}")
+                                hqyzm_frame = frame
+                                break
+                        except Exception:
+                            continue
+                    if hqyzm_frame:
+                        break
+
+            # 方法1: 直接调用hqyzm()函数
+            if hqyzm_frame:
+                try:
+                    hqyzm_frame.evaluate('hqyzm()')
+                    logger.info("方法1成功: 直接调用hqyzm()")
+                    sms_btn_clicked = True
+                except Exception as e:
+                    logger.warning(f"方法1(直接调用hqyzm)失败: {e}")
+
+            # 方法2: 在captcha_page里用getElementById点击
             if not sms_btn_clicked:
                 try:
                     result = captcha_page.evaluate('''() => {
-                        var links = document.querySelectorAll('a');
-                        for(var i=0; i<links.length; i++) {
-                            if(links[i].textContent && links[i].textContent.includes("获取验证码")) {
-                                links[i].click();
-                                return {success: true, text: links[i].textContent.trim(), onclick: links[i].getAttribute('onclick') || ''};
-                            }
+                        var el = document.getElementById("butn");
+                        if(el) {
+                            el.click();
+                            return {success: true, id: el.id, onclick: el.getAttribute('onclick') || ''};
                         }
-                        // 也查找按钮
-                        var btns = document.querySelectorAll('button, input[type="button"]');
-                        for(var i=0; i<btns.length; i++) {
-                            if(btns[i].value && btns[i].value.includes("获取验证码") || btns[i].textContent && btns[i].textContent.includes("获取验证码")) {
-                                btns[i].click();
-                                return {success: true, text: btns[i].textContent.trim() || btns[i].value};
-                            }
+                        el = document.getElementsByName("butn");
+                        if(el.length > 0) {
+                            el[0].click();
+                            return {success: true, name: 'butn', onclick: el[0].getAttribute('onclick') || ''};
                         }
-                        return {success: false, reason: "captcha_page中未找到包含'获取验证码'文字的元素"};
+                        return {success: false};
                     }''')
                     if result.get('success'):
-                        logger.info(f"方法2成功: 按文字查找并点击, text={result.get('text')}")
+                        logger.info(f"方法2成功: captcha_page getElementById/Name点击, {result}")
                         sms_btn_clicked = True
                     else:
-                        logger.warning(f"方法2失败: {result.get('reason')}")
+                        logger.warning("方法2失败: captcha_page中未找到butn元素")
                 except Exception as e:
                     logger.warning(f"方法2异常: {e}")
 
-            # 方法3: 遍历所有frame，只点击有文字"获取验证码"的butn元素
+            # 方法3: 遍历所有frame，找到有onclick=hqyzm的butn并dispatchEvent
             if not sms_btn_clicked:
                 for frame in page.frames:
                     try:
                         result = frame.evaluate('''() => {
-                            var el = document.getElementsByName("butn");
-                            for(var i=0; i<el.length; i++) {
-                                if(el[i].textContent && el[i].textContent.includes("获取验证码")) {
-                                    el[i].click();
-                                    return {success: true, text: el[i].textContent.trim(), url: location.href};
-                                }
+                            var el = document.getElementById("butn");
+                            if(!el) {
+                                var byName = document.getElementsByName("butn");
+                                if(byName.length > 0) el = byName[0];
                             }
-                            var links = document.querySelectorAll('a');
-                            for(var i=0; i<links.length; i++) {
-                                if(links[i].textContent && links[i].textContent.includes("获取验证码")) {
-                                    links[i].click();
-                                    return {success: true, text: links[i].textContent.trim(), url: location.href};
-                                }
+                            if(el && el.getAttribute('onclick') && el.getAttribute('onclick').includes('hqyzm')) {
+                                // 用dispatchEvent模拟完整鼠标事件
+                                var evt = new MouseEvent('click', {bubbles: true, cancelable: true, view: window});
+                                el.dispatchEvent(evt);
+                                return {success: true, url: location.href};
                             }
                             return {success: false};
                         }''')
                         if result.get('success'):
-                            logger.info(f"方法3成功: frame遍历按文字点击, text={result.get('text')}, frame={result.get('url', '')[:60]}")
+                            logger.info(f"方法3成功: dispatchEvent点击, frame={result.get('url', '')[:60]}")
                             sms_btn_clicked = True
                             break
                     except Exception:
                         continue
 
-            # 方法4: 诊断所有frame里的butn元素详情（帮助调试）
+            # 方法4: Playwright locator force click
             if not sms_btn_clicked:
-                logger.error("所有获取验证码方法都失败！开始诊断所有frame...")
+                for frame in page.frames:
+                    try:
+                        btn = frame.locator('#butn')
+                        if btn.count() > 0:
+                            btn.first.click(force=True, timeout=3000)
+                            logger.info(f"方法4成功: Playwright force click #butn, frame={frame.url[:60]}")
+                            sms_btn_clicked = True
+                            break
+                    except Exception:
+                        continue
+
+            if not sms_btn_clicked:
+                logger.error("所有获取验证码方法都失败！")
+                # 诊断
                 for frame in page.frames:
                     try:
                         diag = frame.evaluate('''() => {
-                            var result = {url: location.href, butns: [], links_with_yzm: []};
-                            var el = document.getElementsByName("butn");
-                            for(var i=0; i<el.length; i++) {
-                                result.butns.push({tag: el[i].tagName, text: el[i].textContent.trim(), onclick: el[i].getAttribute('onclick') || '', visible: el[i].offsetParent !== null});
-                            }
-                            var links = document.querySelectorAll('a');
-                            for(var i=0; i<links.length; i++) {
-                                if(links[i].textContent && (links[i].textContent.includes("验证") || links[i].textContent.includes("获取"))) {
-                                    result.links_with_yzm.push({text: links[i].textContent.trim(), onclick: links[i].getAttribute('onclick') || '', name: links[i].name || ''});
-                                }
-                            }
-                            return result;
+                            return {
+                                url: location.href,
+                                has_hqyzm: typeof hqyzm === "function",
+                                butn_by_id: !!document.getElementById("butn"),
+                                butn_by_name: document.getElementsByName("butn").length
+                            };
                         }''')
-                        if diag.get('butns') or diag.get('links_with_yzm'):
-                            logger.info(f"诊断 frame={diag.get('url', '')[:60]}: butns={json.dumps(diag.get('butns', []), ensure_ascii=False)}, links={json.dumps(diag.get('links_with_yzm', []), ensure_ascii=False)}")
+                        logger.info(f"诊断: {json.dumps(diag, ensure_ascii=False)}")
                     except Exception:
                         continue
-                logger.error("所有获取验证码方法都失败了！")
 
-            # 点击后截图，确认按钮状态
-            time.sleep(2)
+            # 点击后等待并验证按钮是否进入倒计时
+            time.sleep(3)
             try:
                 page.screenshot(path="debug_after_click_sms.png")
                 logger.info("已保存点击后截图: debug_after_click_sms.png")
             except Exception:
                 pass
-            time.sleep(2)
+
+            # 检查是否真的点击成功（按钮文字会变成"XX秒后重新获取"）
+            countdown_detected = False
+            for frame in page.frames:
+                try:
+                    check = frame.evaluate('''() => {
+                        var el = document.getElementById("butn") || document.getElementsByName("butn")[0];
+                        if(el) {
+                            var text = el.textContent || el.innerText || '';
+                            return {text: text.trim(), html: el.innerHTML.substring(0, 100)};
+                        }
+                        return null;
+                    }''')
+                    if check and ('秒' in str(check.get('text', '')) or '重新' in str(check.get('text', ''))):
+                        logger.info(f"确认: 获取验证码按钮已进入倒计时 - {check.get('text')}")
+                        countdown_detected = True
+                        break
+                    elif check:
+                        logger.info(f"按钮当前状态: text='{check.get('text')}', html='{check.get('html')}'")
+                except Exception:
+                    continue
+
+            if not countdown_detected and sms_btn_clicked:
+                logger.warning("点击报告成功但未检测到倒计时！按钮可能没有真正被触发")
+
+            time.sleep(1)
 
             # 处理二次验证弹窗（点击获取验证码后可能弹出图片验证码确认框）
             logger.info("登录页: 检查是否有二次验证弹窗")

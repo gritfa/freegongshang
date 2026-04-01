@@ -265,12 +265,13 @@ class AnnualReportBot:
                 ("regNo", reg_no, "注册号"),
             ]
             # 注册号以外的字段，在regNo填入后再处理
+            # 每个字段支持多个候选名称（AJAX后字段名可能变化，如liaName_xin -> liaName）
             other_fields = [
-                ("leRep", enterprise.get("法定代表人", ""), "法定代表人"),
-                ("certId", enterprise.get("身份证", ""), "法定代表人证件号"),
-                ("liaName_xin", new_name, "新联络员姓名"),
-                ("certId_xin", new_id, "新联络员证件号"),
-                ("mobileTel_xin", new_phone, "新联络员手机号"),
+                (["leRep", "lerep"], enterprise.get("法定代表人", ""), "法定代表人"),
+                (["certId", "certid"], enterprise.get("身份证", ""), "法定代表人证件号"),
+                (["liaName_xin", "liaName", "lianame_xin", "lianame"], new_name, "新联络员姓名"),
+                (["certId_xin", "certId_xin", "certid_xin", "cerIdType_xin"], new_id, "新联络员证件号"),
+                (["mobileTel_xin", "mobileTel", "mobiletel_xin", "mobiletel"], new_phone, "新联络员手机号"),
             ]
 
             for field_name, field_value, field_label in fields_to_fill:
@@ -491,32 +492,19 @@ class AnnualReportBot:
 
             time.sleep(1)
 
-            # 填入其余字段
-            for field_name, field_value, field_label in other_fields:
+            # 填入其余字段（支持多候选字段名）
+            for field_names, field_value, field_label in other_fields:
                 if not field_value:
                     logger.warning(f"字段为空，跳过: {field_label}")
                     continue
 
-                # 用JS查找元素（同时尝试id和name两种方式）
-                el_info = form_context.evaluate(f'''() => {{
-                    var el = document.getElementById("{field_name}");
-                    if (!el) el = document.querySelector('input[name="{field_name}"]');
-                    if (!el) return null;
-                    return {{
-                        tag: el.tagName,
-                        type: el.type || "",
-                        visible: !!(el.offsetWidth || el.offsetHeight || el.getClientRects().length),
-                        id: el.id || "",
-                        name: el.name || ""
-                    }};
-                }}''')
-
-                if not el_info:
-                    logger.info(f"元素暂未找到，等待3秒后重试: {field_label} ({field_name})")
-                    time.sleep(3)
+                # 遍历候选字段名，找到第一个存在的
+                el_info = None
+                matched_name = None
+                for candidate in field_names:
                     el_info = form_context.evaluate(f'''() => {{
-                        var el = document.getElementById("{field_name}");
-                        if (!el) el = document.querySelector('input[name="{field_name}"]');
+                        var el = document.getElementById("{candidate}");
+                        if (!el) el = document.querySelector('input[name="{candidate}"]');
                         if (!el) return null;
                         return {{
                             tag: el.tagName,
@@ -526,6 +514,29 @@ class AnnualReportBot:
                             name: el.name || ""
                         }};
                     }}''')
+                    if el_info:
+                        matched_name = candidate
+                        break
+
+                if not el_info:
+                    logger.info(f"元素暂未找到，等待3秒后重试: {field_label} ({field_names})")
+                    time.sleep(3)
+                    for candidate in field_names:
+                        el_info = form_context.evaluate(f'''() => {{
+                            var el = document.getElementById("{candidate}");
+                            if (!el) el = document.querySelector('input[name="{candidate}"]');
+                            if (!el) return null;
+                            return {{
+                                tag: el.tagName,
+                                type: el.type || "",
+                                visible: !!(el.offsetWidth || el.offsetHeight || el.getClientRects().length),
+                                id: el.id || "",
+                                name: el.name || ""
+                            }};
+                        }}''')
+                        if el_info:
+                            matched_name = candidate
+                            break
                     if not el_info:
                         all_inputs = form_context.evaluate('''() => {
                             var inputs = document.querySelectorAll("input");
@@ -535,10 +546,11 @@ class AnnualReportBot:
                             });
                             return result.join(", ");
                         }''')
-                        logger.warning(f"元素不存在: {field_label} ({field_name})，页面所有input: {all_inputs}")
+                        logger.warning(f"元素不存在: {field_label} (尝试过: {field_names})，页面所有input: {all_inputs}")
                         continue
 
-                logger.info(f"找到元素: {field_label} ({field_name}) -> id={el_info.get('id')}, name={el_info.get('name')}, type={el_info.get('type')}, visible={el_info.get('visible')}")
+                field_name = matched_name
+                logger.info(f"找到元素: {field_label} (匹配: {field_name}) -> id={el_info.get('id')}, name={el_info.get('name')}, type={el_info.get('type')}, visible={el_info.get('visible')}")
 
                 is_visible = el_info.get("visible", False)
                 if el_info.get("id"):
@@ -798,51 +810,74 @@ class AnnualReportBot:
 
             # 关闭操作指引开关（联络员登录标签点击后执行）
             try:
-                time.sleep(1)
-                # 方法1: Playwright locator点击
-                czybtn = page.locator('input#czybtn')
-                if czybtn.count() > 0:
-                    if czybtn.is_checked():
-                        czybtn.click()
-                        logger.info("操作指引已关闭（Playwright locator）")
-                        time.sleep(1)
-                    else:
-                        logger.info("操作指引已经是关闭状态")
-                else:
-                    # 方法2: 在所有frame中查找
-                    closed = False
-                    for frame in page.frames:
-                        try:
-                            found = frame.evaluate('() => !!document.getElementById("czybtn")')
-                            if found:
-                                is_checked = frame.evaluate('document.getElementById("czybtn").checked')
-                                if is_checked:
-                                    frame.evaluate('document.getElementById("czybtn").click()')
-                                    logger.info("操作指引已关闭（iframe）")
-                                    time.sleep(1)
-                                else:
-                                    logger.info("操作指引已经是关闭状态（iframe）")
-                                closed = True
-                                break
-                        except Exception:
-                            continue
-                    if not closed:
-                        # 方法3: 用文本匹配找操作指引开关
-                        try:
-                            page.evaluate('''() => {
-                                var inputs = document.querySelectorAll('input[type="checkbox"]');
-                                for(var i=0; i<inputs.length; i++) {
-                                    var el = inputs[i];
-                                    var parent = el.parentElement;
-                                    if(parent && parent.textContent && parent.textContent.includes("操作指引")) {
-                                        if(el.checked) el.click();
+                time.sleep(2)
+                czybtn_closed = False
+
+                # 在所有frame（含主页面）中查找并点击czybtn
+                for frame in page.frames:
+                    try:
+                        result = frame.evaluate('''() => {
+                            var el = document.getElementById("czybtn");
+                            if (el && el.checked) {
+                                el.click();
+                                return "clicked";
+                            } else if (el && !el.checked) {
+                                return "already_off";
+                            }
+                            return "not_found";
+                        }''')
+                        if result == "clicked":
+                            logger.info(f"操作指引已关闭（JS click, frame: {frame.url}）")
+                            czybtn_closed = True
+                            time.sleep(1)
+                            break
+                        elif result == "already_off":
+                            logger.info(f"操作指引已经是关闭状态（frame: {frame.url}）")
+                            czybtn_closed = True
+                            break
+                    except Exception:
+                        continue
+
+                if not czybtn_closed:
+                    # 备用：Playwright force点击
+                    try:
+                        czybtn = page.locator('input#czybtn')
+                        if czybtn.count() > 0:
+                            czybtn.click(force=True)
+                            logger.info("操作指引已关闭（Playwright force click）")
+                            time.sleep(1)
+                        else:
+                            # 尝试在iframe里用Playwright
+                            for frame in page.frames:
+                                try:
+                                    fb = frame.locator('input#czybtn')
+                                    if fb.count() > 0:
+                                        fb.click(force=True)
+                                        logger.info("操作指引已关闭（iframe Playwright force click）")
+                                        time.sleep(1)
+                                        break
+                                except Exception:
+                                    continue
+                    except Exception:
+                        pass
+
+                    # 最后备用：文本匹配所有checkbox
+                    if not czybtn_closed:
+                        for frame in page.frames:
+                            try:
+                                frame.evaluate('''() => {
+                                    var inputs = document.querySelectorAll('input[type="checkbox"]');
+                                    for(var i=0; i<inputs.length; i++) {
+                                        var el = inputs[i];
+                                        var parent = el.parentElement;
+                                        if(parent && parent.textContent && parent.textContent.includes("操作指引")) {
+                                            if(el.checked) el.click();
+                                        }
                                     }
-                                }
-                            }''')
-                            logger.info("操作指引: 用文本匹配方式尝试关闭")
-                        except Exception:
-                            pass
-                        logger.info("未通过id找到操作指引开关，已用文本匹配尝试")
+                                }''')
+                            except Exception:
+                                continue
+                        logger.info("操作指引: 已用文本匹配方式在所有frame中尝试关闭")
             except Exception as e:
                 logger.warning(f"关闭操作指引失败: {e}，继续执行")
 

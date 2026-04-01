@@ -813,71 +813,100 @@ class AnnualReportBot:
                 time.sleep(2)
                 czybtn_closed = False
 
-                # 在所有frame（含主页面）中查找并点击czybtn
+                # 诊断：列出所有frame中的checkbox
                 for frame in page.frames:
                     try:
-                        result = frame.evaluate('''() => {
-                            var el = document.getElementById("czybtn");
-                            if (el && el.checked) {
-                                el.click();
-                                return "clicked";
-                            } else if (el && !el.checked) {
-                                return "already_off";
+                        checkboxes = frame.evaluate('''() => {
+                            var cbs = document.querySelectorAll('input[type="checkbox"]');
+                            var result = [];
+                            for(var i=0; i<cbs.length; i++) {
+                                var el = cbs[i];
+                                result.push({
+                                    id: el.id, name: el.name,
+                                    checked: el.checked, visible: el.offsetParent !== null,
+                                    parentText: (el.parentElement ? el.parentElement.textContent : "").substring(0, 50)
+                                });
                             }
-                            return "not_found";
+                            return result;
                         }''')
-                        if result == "clicked":
-                            logger.info(f"操作指引已关闭（JS click, frame: {frame.url}）")
-                            czybtn_closed = True
-                            time.sleep(1)
-                            break
-                        elif result == "already_off":
-                            logger.info(f"操作指引已经是关闭状态（frame: {frame.url}）")
-                            czybtn_closed = True
-                            break
+                        if checkboxes:
+                            logger.info(f"frame [{frame.url[:60]}] checkboxes: {checkboxes}")
                     except Exception:
                         continue
 
+                # 在所有frame中查找并点击所有可能的操作指引checkbox
+                candidate_ids = ["czybtn", "czzybut", "czzybtn", "czybut"]
+                for frame in page.frames:
+                    for cid in candidate_ids:
+                        try:
+                            result = frame.evaluate(f'''() => {{
+                                var el = document.getElementById("{cid}");
+                                if (el && el.type === "checkbox" && el.checked) {{
+                                    el.click();
+                                    return "clicked_" + "{cid}";
+                                }} else if (el && el.type === "checkbox" && !el.checked) {{
+                                    return "already_off_" + "{cid}";
+                                }}
+                                return "not_found";
+                            }}''')
+                            if result.startswith("clicked_"):
+                                logger.info(f"操作指引已关闭（{result}, frame: {frame.url[:60]}）")
+                                czybtn_closed = True
+                                time.sleep(1)
+                                break
+                            elif result.startswith("already_off_"):
+                                logger.info(f"操作指引已关闭状态（{result}, frame: {frame.url[:60]}）")
+                                czybtn_closed = True
+                                break
+                        except Exception:
+                            continue
+                    if czybtn_closed:
+                        break
+
+                # 备用：点击所有已勾选的checkbox（排除协议相关的）
                 if not czybtn_closed:
-                    # 备用：Playwright force点击
-                    try:
-                        czybtn = page.locator('input#czybtn')
-                        if czybtn.count() > 0:
-                            czybtn.click(force=True)
-                            logger.info("操作指引已关闭（Playwright force click）")
-                            time.sleep(1)
-                        else:
-                            # 尝试在iframe里用Playwright
-                            for frame in page.frames:
+                    for frame in page.frames:
+                        try:
+                            frame.evaluate('''() => {
+                                var cbs = document.querySelectorAll('input[type="checkbox"]');
+                                for(var i=0; i<cbs.length; i++) {
+                                    if(cbs[i].checked) {
+                                        cbs[i].click();
+                                    }
+                                }
+                            }''')
+                        except Exception:
+                            continue
+                    logger.info("操作指引: 已尝试取消所有已勾选checkbox")
+
+                # 备用：Playwright force点击
+                if not czybtn_closed:
+                    for selector in ['input#czybtn', 'input#czzybut', 'input[name="czybtn"]', 'input[name="czzybut"]']:
+                        try:
+                            el = page.locator(selector)
+                            if el.count() > 0 and el.is_checked():
+                                el.click(force=True)
+                                logger.info(f"操作指引已关闭（Playwright force click {selector}）")
+                                czybtn_closed = True
+                                time.sleep(1)
+                                break
+                        except Exception:
+                            continue
+                    if not czybtn_closed:
+                        for frame in page.frames:
+                            for selector in ['input#czybtn', 'input#czzybut', 'input[name="czybtn"]', 'input[name="czzybut"]']:
                                 try:
-                                    fb = frame.locator('input#czybtn')
-                                    if fb.count() > 0:
-                                        fb.click(force=True)
-                                        logger.info("操作指引已关闭（iframe Playwright force click）")
+                                    el = frame.locator(selector)
+                                    if el.count() > 0 and el.is_checked():
+                                        el.click(force=True)
+                                        logger.info(f"操作指引已关闭（iframe Playwright force click {selector}）")
+                                        czybtn_closed = True
                                         time.sleep(1)
                                         break
                                 except Exception:
                                     continue
-                    except Exception:
-                        pass
-
-                    # 最后备用：文本匹配所有checkbox
-                    if not czybtn_closed:
-                        for frame in page.frames:
-                            try:
-                                frame.evaluate('''() => {
-                                    var inputs = document.querySelectorAll('input[type="checkbox"]');
-                                    for(var i=0; i<inputs.length; i++) {
-                                        var el = inputs[i];
-                                        var parent = el.parentElement;
-                                        if(parent && parent.textContent && parent.textContent.includes("操作指引")) {
-                                            if(el.checked) el.click();
-                                        }
-                                    }
-                                }''')
-                            except Exception:
-                                continue
-                        logger.info("操作指引: 已用文本匹配方式在所有frame中尝试关闭")
+                            if czybtn_closed:
+                                break
             except Exception as e:
                 logger.warning(f"关闭操作指引失败: {e}，继续执行")
 
@@ -995,60 +1024,131 @@ class AnnualReportBot:
             ):
                 return False
 
-            # 点击获取短信验证码 — 按钮onclick是hyzm()，name="butn"
+            # 点击获取短信验证码
             logger.info("登录页: 点击获取验证码")
             sms_btn_clicked = False
 
-            # 方法1: 在captcha_page调用hyzm()
-            try:
-                captcha_page.evaluate('hyzm()')
-                logger.info("登录页获取验证码: JS hyzm() 调用成功(captcha_page)")
-                sms_btn_clicked = True
-            except Exception as e1:
-                logger.warning(f"captcha_page hyzm() 失败: {e1}")
-
-            # 方法2: 在主页面page调用hyzm()
-            if not sms_btn_clicked and captcha_page != page:
+            # 诊断：列出所有frame中包含"获取验证码"文字的元素和<a>标签
+            for frame in page.frames:
                 try:
-                    page.evaluate('hyzm()')
-                    logger.info("登录页获取验证码: JS hyzm() 调用成功(page)")
-                    sms_btn_clicked = True
-                except Exception as e2:
-                    logger.warning(f"page hyzm() 失败: {e2}")
+                    btn_info = frame.evaluate('''() => {
+                        var result = [];
+                        // 查找所有a标签
+                        var links = document.querySelectorAll('a');
+                        for(var i=0; i<links.length; i++) {
+                            var a = links[i];
+                            if(a.name || a.id || (a.textContent && a.textContent.includes("验证码"))) {
+                                result.push({
+                                    tag: 'a', id: a.id, name: a.name,
+                                    onclick: a.getAttribute('onclick') || '',
+                                    text: a.textContent.trim().substring(0, 30),
+                                    visible: a.offsetParent !== null
+                                });
+                            }
+                        }
+                        // 查找所有button
+                        var btns = document.querySelectorAll('button, input[type="button"], input[type="submit"]');
+                        for(var i=0; i<btns.length; i++) {
+                            var b = btns[i];
+                            if(b.name || b.id || (b.textContent && b.textContent.includes("验证码")) || (b.value && b.value.includes("验证码"))) {
+                                result.push({
+                                    tag: b.tagName, id: b.id, name: b.name,
+                                    onclick: b.getAttribute('onclick') || '',
+                                    text: (b.textContent || b.value || '').trim().substring(0, 30),
+                                    visible: b.offsetParent !== null
+                                });
+                            }
+                        }
+                        return result;
+                    }''')
+                    if btn_info:
+                        logger.info(f"frame [{frame.url[:60]}] 按钮诊断: {btn_info}")
+                except Exception:
+                    continue
 
-            # 方法3: 在所有frame中尝试hyzm()
-            if not sms_btn_clicked:
-                for frame in page.frames:
+            # 方法1: 在所有frame中尝试各种可能的JS函数名
+            func_names = ['hyzm()', 'getCode()', 'getCode2()', 'sendSms()', 'getSmsCode()', 'sendCode()']
+            for frame in page.frames:
+                for func_name in func_names:
                     try:
-                        frame.evaluate('hyzm()')
-                        logger.info(f"登录页获取验证码: JS hyzm() 调用成功(frame: {frame.url})")
+                        frame.evaluate(func_name)
+                        logger.info(f"登录页获取验证码: JS {func_name} 成功(frame: {frame.url[:60]})")
                         sms_btn_clicked = True
                         break
                     except Exception:
                         continue
+                if sms_btn_clicked:
+                    break
 
-            # 方法4: 用Playwright直接点击按钮元素
+            # 方法2: 在所有frame中查找并点击包含"验证码"文字的<a>标签
             if not sms_btn_clicked:
-                try:
-                    btn = captcha_page.locator('a[name="butn"]')
-                    if btn.count() > 0:
-                        btn.click()
-                        logger.info("登录页获取验证码: Playwright click a[name=butn] 成功")
-                        sms_btn_clicked = True
-                except Exception as e3:
-                    logger.warning(f"Playwright click butn 失败: {e3}")
+                for frame in page.frames:
+                    try:
+                        clicked = frame.evaluate('''() => {
+                            var links = document.querySelectorAll('a');
+                            for(var i=0; i<links.length; i++) {
+                                if(links[i].textContent && links[i].textContent.includes("获取验证码")) {
+                                    links[i].click();
+                                    return true;
+                                }
+                            }
+                            return false;
+                        }''')
+                        if clicked:
+                            logger.info(f"登录页获取验证码: 文本匹配click成功(frame: {frame.url[:60]})")
+                            sms_btn_clicked = True
+                            break
+                    except Exception:
+                        continue
 
-            # 方法5: getElementsByName
+            # 方法3: Playwright直接点击 - 多种选择器
             if not sms_btn_clicked:
-                try:
-                    captcha_page.evaluate('document.getElementsByName("butn")[0].click()')
-                    logger.info("登录页获取验证码: JS click butn 成功")
-                    sms_btn_clicked = True
-                except Exception as e4:
-                    logger.error(f"登录页获取验证码按钮全部失败: {e4}")
+                selectors = [
+                    'a[name="butn"]', 'a#butn', 'a:has-text("获取验证码")',
+                    'text=获取验证码', '[onclick*="hyzm"]', '[onclick*="getCode"]',
+                    '[onclick*="sendSms"]', '[onclick*="Code"]'
+                ]
+                for sel in selectors:
+                    # 在captcha_page尝试
+                    try:
+                        el = captcha_page.locator(sel)
+                        if el.count() > 0:
+                            el.first.click(force=True)
+                            logger.info(f"登录页获取验证码: Playwright click '{sel}' 成功(captcha_page)")
+                            sms_btn_clicked = True
+                            break
+                    except Exception:
+                        pass
+                    # 在page尝试
+                    if not sms_btn_clicked and captcha_page != page:
+                        try:
+                            el = page.locator(sel)
+                            if el.count() > 0:
+                                el.first.click(force=True)
+                                logger.info(f"登录页获取验证码: Playwright click '{sel}' 成功(page)")
+                                sms_btn_clicked = True
+                                break
+                        except Exception:
+                            pass
+
+            # 方法4: getElementsByName在所有frame
+            if not sms_btn_clicked:
+                for frame in page.frames:
+                    try:
+                        result = frame.evaluate('''() => {
+                            var el = document.getElementsByName("butn");
+                            if(el.length > 0) { el[0].click(); return true; }
+                            return false;
+                        }''')
+                        if result:
+                            logger.info(f"登录页获取验证码: getElementsByName成功(frame: {frame.url[:60]})")
+                            sms_btn_clicked = True
+                            break
+                    except Exception:
+                        continue
 
             if not sms_btn_clicked:
-                logger.error("所有获取验证码方法都失败了！")
+                logger.error("所有获取验证码方法都失败了！请检查按钮诊断日志")
             time.sleep(2)
 
             # 等待短信验证码

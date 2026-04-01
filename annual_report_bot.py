@@ -1879,8 +1879,22 @@ class AnnualReportBot:
             active_page = self.change_liaison(page, enterprise)
             if active_page:
                 result["联络员变更"] = "成功"
-                # 使用变更后返回的活动页面（可能已跳转到登录页）
-                page = active_page
+                # 变更完成后关闭所有多余标签页，用原始page重新打开登录页
+                logger.info("联络员变更完成，关闭当前页面，重新打开登录页")
+                try:
+                    # 关闭所有多余的标签页
+                    all_pages = page.context.pages
+                    for p in all_pages:
+                        if p != page:
+                            try:
+                                p.close()
+                            except Exception:
+                                pass
+                    # 用原始page重新导航到登录页
+                    page.goto(config.LOGIN_URL, wait_until="domcontentloaded")
+                    time.sleep(3)
+                except Exception as e:
+                    logger.warning(f"重新打开登录页异常: {e}")
             else:
                 result["联络员变更"] = "失败"
                 logger.error(f"联络员变更失败，跳过此企业: {reg_no}")

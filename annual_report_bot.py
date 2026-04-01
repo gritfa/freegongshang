@@ -1001,131 +1001,118 @@ class AnnualReportBot:
             except Exception:
                 pass
 
-            # 先用JS在所有frame里查找"获取验证码"按钮的精确信息
-            btn_found_frame = None
-            btn_box = None
-            for frame in page.frames:
-                try:
-                    info = frame.evaluate('''() => {
-                        // 查找name=butn的元素
-                        var el = document.getElementsByName("butn");
-                        if(el.length > 0) {
-                            var btn = el[0];
-                            var rect = btn.getBoundingClientRect();
-                            return {
-                                found: true, method: 'name_butn',
-                                tag: btn.tagName, text: btn.textContent.trim(),
-                                onclick: btn.getAttribute('onclick') || '',
-                                visible: btn.offsetParent !== null,
-                                display: getComputedStyle(btn).display,
-                                x: rect.x, y: rect.y, w: rect.width, h: rect.height,
-                                centerX: rect.x + rect.width/2,
-                                centerY: rect.y + rect.height/2
-                            };
+            # 直接在captcha_page（verifyTxCode所在的iframe）里点击获取验证码按钮
+            # 之前遍历page.frames找到了错误的同名空元素，导致点击无效
+            # captcha_page就是正确的iframe，按钮也在这里面
+
+            # 方法1: 在captcha_page里用JS .click()（用户在控制台手动验证过这个方法能用）
+            try:
+                result = captcha_page.evaluate('''() => {
+                    var el = document.getElementsByName("butn");
+                    if(el.length > 0) {
+                        for(var i=0; i<el.length; i++) {
+                            if(el[i].textContent && el[i].textContent.trim().length > 0) {
+                                el[i].click();
+                                return {success: true, text: el[i].textContent.trim(), index: i, onclick: el[i].getAttribute('onclick') || ''};
+                            }
                         }
-                        // 查找包含"获取验证码"文字的链接
+                        // 如果都没有文字，点击第一个
+                        el[0].click();
+                        return {success: true, text: '', index: 0, onclick: el[0].getAttribute('onclick') || '', note: '无文字元素'};
+                    }
+                    return {success: false, reason: "captcha_page中未找到name=butn元素"};
+                }''')
+                if result.get('success'):
+                    logger.info(f"方法1成功: captcha_page JS .click() on butn, text={result.get('text')}, onclick={result.get('onclick')}")
+                    if result.get('text'):
+                        sms_btn_clicked = True
+                    else:
+                        logger.warning("方法1: 按钮文字为空，可能点到了错误元素，继续尝试其他方法")
+                else:
+                    logger.warning(f"方法1失败: {result.get('reason')}")
+            except Exception as e:
+                logger.warning(f"方法1异常: {e}")
+
+            # 方法2: 在captcha_page里按文字"获取验证码"查找并点击
+            if not sms_btn_clicked:
+                try:
+                    result = captcha_page.evaluate('''() => {
                         var links = document.querySelectorAll('a');
                         for(var i=0; i<links.length; i++) {
                             if(links[i].textContent && links[i].textContent.includes("获取验证码")) {
-                                var rect = links[i].getBoundingClientRect();
-                                return {
-                                    found: true, method: 'text_match',
-                                    tag: links[i].tagName, text: links[i].textContent.trim(),
-                                    onclick: links[i].getAttribute('onclick') || '',
-                                    visible: links[i].offsetParent !== null,
-                                    display: getComputedStyle(links[i]).display,
-                                    x: rect.x, y: rect.y, w: rect.width, h: rect.height,
-                                    centerX: rect.x + rect.width/2,
-                                    centerY: rect.y + rect.height/2
-                                };
+                                links[i].click();
+                                return {success: true, text: links[i].textContent.trim(), onclick: links[i].getAttribute('onclick') || ''};
                             }
                         }
-                        return {found: false};
-                    }''')
-                    if info.get('found'):
-                        logger.info(f"找到获取验证码按钮! frame={frame.url[:60]}, info={json.dumps(info, ensure_ascii=False)}")
-                        btn_found_frame = frame
-                        btn_box = info
-                        break
-                except Exception:
-                    continue
-
-            if btn_box:
-                logger.info(f"按钮信息: onclick={btn_box.get('onclick')}, visible={btn_box.get('visible')}, frame={btn_found_frame.url[:80]}")
-
-                # 方法1: JS .click() — 在正确的iframe里直接调用DOM元素的click()
-                # 这是手动在控制台验证过能用的方法
-                try:
-                    result = btn_found_frame.evaluate('''() => {
-                        var el = document.getElementsByName("butn");
-                        if(el.length > 0) {
-                            el[0].click();
-                            return {success: true, text: el[0].textContent.trim()};
+                        // 也查找按钮
+                        var btns = document.querySelectorAll('button, input[type="button"]');
+                        for(var i=0; i<btns.length; i++) {
+                            if(btns[i].value && btns[i].value.includes("获取验证码") || btns[i].textContent && btns[i].textContent.includes("获取验证码")) {
+                                btns[i].click();
+                                return {success: true, text: btns[i].textContent.trim() || btns[i].value};
+                            }
                         }
-                        return {success: false, reason: "getElementsByName butn 找不到元素"};
+                        return {success: false, reason: "captcha_page中未找到包含'获取验证码'文字的元素"};
                     }''')
                     if result.get('success'):
-                        logger.info(f"方法1成功: JS .click() on butn, text={result.get('text')}")
+                        logger.info(f"方法2成功: 按文字查找并点击, text={result.get('text')}")
                         sms_btn_clicked = True
                     else:
-                        logger.warning(f"方法1失败: {result.get('reason')}")
+                        logger.warning(f"方法2失败: {result.get('reason')}")
                 except Exception as e:
-                    logger.warning(f"方法1异常: {e}")
+                    logger.warning(f"方法2异常: {e}")
 
-                # 方法2: 遍历所有frame用JS .click()（防止btn_found_frame不对）
-                if not sms_btn_clicked:
-                    for frame in page.frames:
-                        try:
-                            result = frame.evaluate('''() => {
-                                var el = document.getElementsByName("butn");
-                                if(el.length > 0) {
-                                    el[0].click();
-                                    return true;
-                                }
-                                return false;
-                            }''')
-                            if result:
-                                logger.info(f"方法2成功: 遍历frame JS .click() (frame: {frame.url[:60]})")
-                                sms_btn_clicked = True
-                                break
-                        except Exception:
-                            continue
-
-                # 方法3: Playwright locator force点击
-                if not sms_btn_clicked:
-                    try:
-                        btn_found_frame.locator('a[name="butn"]').first.click(force=True, timeout=5000)
-                        logger.info("方法3成功: Playwright force点击 a[name=butn]")
-                        sms_btn_clicked = True
-                    except Exception as e:
-                        logger.warning(f"方法3失败: {e}")
-
-                # 方法4: 直接调用onclick函数
-                if not sms_btn_clicked:
-                    for func_name in ['hqyzm()', 'hyzm()', 'getCode2()', 'getCode()']:
-                        try:
-                            btn_found_frame.evaluate(func_name)
-                            logger.info(f"方法4成功: JS {func_name}")
-                            sms_btn_clicked = True
-                            break
-                        except Exception:
-                            continue
-
-            else:
-                logger.error("所有frame中都没有找到获取验证码按钮！")
-
-            # 方法6（兜底）: 遍历所有frame尝试点击
+            # 方法3: 遍历所有frame，只点击有文字"获取验证码"的butn元素
             if not sms_btn_clicked:
                 for frame in page.frames:
                     try:
-                        frame.locator('a[name="butn"]').first.click(force=True, timeout=3000)
-                        logger.info(f"方法6成功: 遍历frame点击 (frame: {frame.url[:60]})")
-                        sms_btn_clicked = True
-                        break
+                        result = frame.evaluate('''() => {
+                            var el = document.getElementsByName("butn");
+                            for(var i=0; i<el.length; i++) {
+                                if(el[i].textContent && el[i].textContent.includes("获取验证码")) {
+                                    el[i].click();
+                                    return {success: true, text: el[i].textContent.trim(), url: location.href};
+                                }
+                            }
+                            var links = document.querySelectorAll('a');
+                            for(var i=0; i<links.length; i++) {
+                                if(links[i].textContent && links[i].textContent.includes("获取验证码")) {
+                                    links[i].click();
+                                    return {success: true, text: links[i].textContent.trim(), url: location.href};
+                                }
+                            }
+                            return {success: false};
+                        }''')
+                        if result.get('success'):
+                            logger.info(f"方法3成功: frame遍历按文字点击, text={result.get('text')}, frame={result.get('url', '')[:60]}")
+                            sms_btn_clicked = True
+                            break
                     except Exception:
                         continue
 
+            # 方法4: 诊断所有frame里的butn元素详情（帮助调试）
             if not sms_btn_clicked:
+                logger.error("所有获取验证码方法都失败！开始诊断所有frame...")
+                for frame in page.frames:
+                    try:
+                        diag = frame.evaluate('''() => {
+                            var result = {url: location.href, butns: [], links_with_yzm: []};
+                            var el = document.getElementsByName("butn");
+                            for(var i=0; i<el.length; i++) {
+                                result.butns.push({tag: el[i].tagName, text: el[i].textContent.trim(), onclick: el[i].getAttribute('onclick') || '', visible: el[i].offsetParent !== null});
+                            }
+                            var links = document.querySelectorAll('a');
+                            for(var i=0; i<links.length; i++) {
+                                if(links[i].textContent && (links[i].textContent.includes("验证") || links[i].textContent.includes("获取"))) {
+                                    result.links_with_yzm.push({text: links[i].textContent.trim(), onclick: links[i].getAttribute('onclick') || '', name: links[i].name || ''});
+                                }
+                            }
+                            return result;
+                        }''')
+                        if diag.get('butns') or diag.get('links_with_yzm'):
+                            logger.info(f"诊断 frame={diag.get('url', '')[:60]}: butns={json.dumps(diag.get('butns', []), ensure_ascii=False)}, links={json.dumps(diag.get('links_with_yzm', []), ensure_ascii=False)}")
+                    except Exception:
+                        continue
                 logger.error("所有获取验证码方法都失败了！")
 
             # 点击后截图，确认按钮状态

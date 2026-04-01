@@ -1846,17 +1846,17 @@ class AnnualReportBot:
     
     # ==================== 处理单个企业 ====================
     
-    def process_enterprise(self, page: Page, enterprise: dict, 
-                           report_data: dict, need_change_liaison: bool = True) -> dict:
+    def process_enterprise(self, page: Page, enterprise: dict,
+                           report_data: dict, need_change_liaison: bool = True) -> tuple:
         """处理单个企业的完整流程
-        
+
         Args:
             page: 页面对象
             enterprise: 企业基本信息
             report_data: 该企业的年报数据
             need_change_liaison: 是否需要变更联络员
         Returns:
-            处理结果字典
+            (处理结果字典, 当前page对象) — page可能因为新建context而变化
         """
         reg_no = enterprise.get("注册号/统一社会信用代码", enterprise.get("注册号", ""))
         name = enterprise.get("企业名称", "")
@@ -1879,29 +1879,27 @@ class AnnualReportBot:
             active_page = self.change_liaison(page, enterprise)
             if active_page:
                 result["联络员变更"] = "成功"
-                # 变更完成后关闭多余标签页，用原始page重新导航
-                logger.info("联络员变更完成，准备重新进入登录页")
+                # 变更完成后创建全新的浏览器context，确保100%干净的状态
+                logger.info("联络员变更完成，创建全新浏览器context重新登录")
                 try:
-                    context = page.context
-                    # 关闭除第一个以外的多余标签页
-                    pages = context.pages
-                    if len(pages) > 1:
-                        for p in pages[1:]:
-                            try:
-                                p.close()
-                            except Exception:
-                                pass
-                        page = context.pages[0]
-                    # 直接导航到登录页（不清除cookies）
-                    page.goto(config.LOGIN_URL, wait_until="domcontentloaded")
-                    time.sleep(3)
-                    logger.info(f"已重新导航到登录页，URL: {page.url}")
+                    browser = page.context.browser
+                    old_context = page.context
+                    # 关闭旧context（包含所有页面和cookies/JS状态）
+                    old_context.close()
+                    # 创建全新的context和page
+                    new_context = browser.new_context(
+                        viewport={"width": 1280, "height": 900},
+                        locale="zh-CN",
+                    )
+                    page = new_context.new_page()
+                    page.set_default_timeout(config.TIMEOUT)
+                    logger.info("已创建全新浏览器context")
                 except Exception as e:
-                    logger.warning(f"重新导航异常: {e}")
+                    logger.warning(f"创建新context异常: {e}")
             else:
                 result["联络员变更"] = "失败"
                 logger.error(f"联络员变更失败，跳过此企业: {reg_no}")
-                return result
+                return result, page
 
         # 步骤2：登录（用新联络员手机号）
         phone = enterprise.get("新联络员手机号", "")
@@ -1910,8 +1908,8 @@ class AnnualReportBot:
         else:
             result["登录"] = "失败"
             logger.error(f"登录失败，跳过此企业: {reg_no}")
-            return result
-        
+            return result, page
+
         # 步骤3：填写年报
         if report_data:
             if self.fill_annual_report(page, reg_no, report_data):
@@ -1921,8 +1919,8 @@ class AnnualReportBot:
         else:
             result["年报填写"] = "无数据"
             logger.warning(f"未找到年报数据: {reg_no}")
-        
-        return result
+
+        return result, page
     
     # ==================== 主入口 ====================
     
@@ -1965,8 +1963,8 @@ class AnnualReportBot:
                 # 查找对应的年报数据
                 report = report_data_map.get(reg_no, {})
                 
-                # 处理
-                result = self.process_enterprise(
+                # 处理（page可能因新建context而变化，需要更新）
+                result, page = self.process_enterprise(
                     page, enterprise, report, need_change_liaison
                 )
                 self.results.append(result)

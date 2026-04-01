@@ -1053,59 +1053,59 @@ class AnnualReportBot:
             if btn_box:
                 logger.info(f"按钮信息: onclick={btn_box.get('onclick')}, visible={btn_box.get('visible')}, frame={btn_found_frame.url[:80]}")
 
-                # 方法1: Playwright locator 真实点击（最可靠，模拟完整鼠标事件）
+                # 方法1: JS .click() — 在正确的iframe里直接调用DOM元素的click()
+                # 这是手动在控制台验证过能用的方法
                 try:
-                    btn_found_frame.locator('a[name="butn"]').first.click(timeout=5000)
-                    logger.info("方法1成功: Playwright点击 a[name=butn]")
-                    sms_btn_clicked = True
-                except Exception as e:
-                    logger.warning(f"方法1失败(a[name=butn]): {e}")
-
-                # 方法2: 用文本匹配点击
-                if not sms_btn_clicked:
-                    try:
-                        btn_found_frame.locator('a:has-text("获取验证码")').first.click(timeout=5000)
-                        logger.info("方法2成功: Playwright点击 '获取验证码'")
+                    result = btn_found_frame.evaluate('''() => {
+                        var el = document.getElementsByName("butn");
+                        if(el.length > 0) {
+                            el[0].click();
+                            return {success: true, text: el[0].textContent.trim()};
+                        }
+                        return {success: false, reason: "getElementsByName butn 找不到元素"};
+                    }''')
+                    if result.get('success'):
+                        logger.info(f"方法1成功: JS .click() on butn, text={result.get('text')}")
                         sms_btn_clicked = True
-                    except Exception as e:
-                        logger.warning(f"方法2失败(文本匹配): {e}")
+                    else:
+                        logger.warning(f"方法1失败: {result.get('reason')}")
+                except Exception as e:
+                    logger.warning(f"方法1异常: {e}")
 
-                # 方法3: force=True 强制点击（绕过遮罩层）
+                # 方法2: 遍历所有frame用JS .click()（防止btn_found_frame不对）
+                if not sms_btn_clicked:
+                    for frame in page.frames:
+                        try:
+                            result = frame.evaluate('''() => {
+                                var el = document.getElementsByName("butn");
+                                if(el.length > 0) {
+                                    el[0].click();
+                                    return true;
+                                }
+                                return false;
+                            }''')
+                            if result:
+                                logger.info(f"方法2成功: 遍历frame JS .click() (frame: {frame.url[:60]})")
+                                sms_btn_clicked = True
+                                break
+                        except Exception:
+                            continue
+
+                # 方法3: Playwright locator force点击
                 if not sms_btn_clicked:
                     try:
                         btn_found_frame.locator('a[name="butn"]').first.click(force=True, timeout=5000)
                         logger.info("方法3成功: Playwright force点击 a[name=butn]")
                         sms_btn_clicked = True
                     except Exception as e:
-                        logger.warning(f"方法3失败(force点击): {e}")
+                        logger.warning(f"方法3失败: {e}")
 
-                # 方法4: JS dispatchEvent 模拟完整鼠标事件（比直接调函数更真实）
-                if not sms_btn_clicked:
-                    try:
-                        btn_found_frame.evaluate('''() => {
-                            var el = document.getElementsByName("butn");
-                            if(el.length > 0) {
-                                var btn = el[0];
-                                var events = ['mousedown', 'mouseup', 'click'];
-                                events.forEach(function(evtName) {
-                                    var evt = new MouseEvent(evtName, {bubbles: true, cancelable: true, view: window});
-                                    btn.dispatchEvent(evt);
-                                });
-                                return true;
-                            }
-                            return false;
-                        }''')
-                        logger.info("方法4成功: JS dispatchEvent 模拟鼠标事件")
-                        sms_btn_clicked = True
-                    except Exception as e:
-                        logger.warning(f"方法4失败(dispatchEvent): {e}")
-
-                # 方法5: 直接调用onclick函数 hqyzm()
+                # 方法4: 直接调用onclick函数
                 if not sms_btn_clicked:
                     for func_name in ['hqyzm()', 'hyzm()', 'getCode2()', 'getCode()']:
                         try:
                             btn_found_frame.evaluate(func_name)
-                            logger.info(f"方法5成功: JS {func_name}")
+                            logger.info(f"方法4成功: JS {func_name}")
                             sms_btn_clicked = True
                             break
                         except Exception:

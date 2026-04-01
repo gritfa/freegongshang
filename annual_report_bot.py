@@ -1010,6 +1010,7 @@ class AnnualReportBot:
                         if result.get('success'):
                             logger.info(f"方法1成功: hqyzm_frame JS .click() on butn, onclick={result.get('onclick')}")
                             sms_btn_clicked = True
+                            self._hqyzm_frame = hqyzm_frame  # 保存frame引用，供登录按钮使用
                     except Exception as e:
                         logger.warning(f"方法1失败: {e}")
 
@@ -1019,6 +1020,7 @@ class AnnualReportBot:
                         hqyzm_frame.evaluate('hqyzm()')
                         logger.info("方法2成功: 直接调用hqyzm()")
                         sms_btn_clicked = True
+                        self._hqyzm_frame = hqyzm_frame  # 保存frame引用，供登录按钮使用
                     except Exception as e:
                         logger.warning(f"方法2失败: {e}")
 
@@ -1296,50 +1298,83 @@ class AnnualReportBot:
 
             # 点击登录按钮 — <a id="EleLicLoginBtn" href="javascript:logindz()">
             logger.info("登录页: 点击登录按钮")
+
+            # 先截图，看点击前的页面状态
+            self.take_screenshot(page, f"before_login_click_{reg_no}")
+
             login_clicked = False
 
-            # 方式1：遍历所有frame，找到logindz函数并调用（与获取验证码按钮相同策略）
-            for frame in page.frames:
+            # 方式1：在hqyzm_frame（获取验证码所在的正确frame）里找logindz并调用
+            # 登录按钮和获取验证码按钮在同一个iframe里
+            if hasattr(self, '_hqyzm_frame') and self._hqyzm_frame:
                 try:
-                    has_func = frame.evaluate('typeof logindz === "function"')
+                    has_func = self._hqyzm_frame.evaluate('typeof logindz === "function"')
                     if has_func:
-                        frame_url = frame.url
-                        logger.info(f"找到logindz函数所在frame: {frame_url}")
-                        frame.evaluate('logindz()')
+                        logger.info(f"在hqyzm_frame里找到logindz函数")
+                        self._hqyzm_frame.evaluate('logindz()')
                         login_clicked = True
-                        logger.info("登录按钮: logindz()调用成功")
-                        break
+                        logger.info("登录按钮: hqyzm_frame.logindz()调用成功")
                 except Exception as e:
-                    pass
+                    logger.warning(f"hqyzm_frame调用logindz失败: {e}")
 
-            # 方式2：通过id点击EleLicLoginBtn
+            # 方式2：遍历所有frame，找到logindz函数并调用
+            if not login_clicked:
+                for frame in page.frames:
+                    try:
+                        has_func = frame.evaluate('typeof logindz === "function"')
+                        if has_func:
+                            frame_url = frame.url
+                            logger.info(f"找到logindz函数所在frame: {frame_url}")
+                            frame.evaluate('logindz()')
+                            login_clicked = True
+                            logger.info("登录按钮: logindz()调用成功")
+                            break
+                    except Exception as e:
+                        pass
+
+            # 方式3：在所有frame里找visible的EleLicLoginBtn并click
             if not login_clicked:
                 for frame in page.frames:
                     try:
                         result = frame.evaluate('''() => {
-                            var el = document.getElementById("EleLicLoginBtn");
-                            if (el) { el.click(); return "clicked"; }
+                            var els = document.querySelectorAll('#EleLicLoginBtn, a[name="EleLicLoginBtn"]');
+                            for (var i = 0; i < els.length; i++) {
+                                var el = els[i];
+                                var rect = el.getBoundingClientRect();
+                                if (rect.width > 0 && rect.height > 0) {
+                                    el.click();
+                                    return "clicked_visible_" + el.id + "_" + el.textContent.trim();
+                                }
+                            }
                             return "not_found";
                         }''')
-                        if result == "clicked":
+                        if result.startswith("clicked"):
                             login_clicked = True
-                            logger.info("登录按钮: getElementById('EleLicLoginBtn').click()成功")
+                            logger.info(f"登录按钮: {result}")
                             break
                     except Exception:
                         pass
 
-            # 方式3：通过name点击
+            # 方式4：用文字"登录"查找按钮
             if not login_clicked:
                 for frame in page.frames:
                     try:
                         result = frame.evaluate('''() => {
-                            var els = document.getElementsByName("EleLicLoginBtn");
-                            if (els.length > 0) { els[0].click(); return "clicked"; }
+                            var links = document.querySelectorAll('a, button, input[type="submit"]');
+                            for (var i = 0; i < links.length; i++) {
+                                var el = links[i];
+                                var text = el.textContent.trim() || el.value || '';
+                                var rect = el.getBoundingClientRect();
+                                if (text === '登录' && rect.width > 0 && rect.height > 0) {
+                                    el.click();
+                                    return "clicked_text_" + el.tagName + "_" + el.id;
+                                }
+                            }
                             return "not_found";
                         }''')
-                        if result == "clicked":
+                        if result.startswith("clicked"):
                             login_clicked = True
-                            logger.info("登录按钮: getElementsByName('EleLicLoginBtn')点击成功")
+                            logger.info(f"登录按钮(文字匹配): {result}")
                             break
                     except Exception:
                         pass
@@ -1347,13 +1382,20 @@ class AnnualReportBot:
             if not login_clicked:
                 logger.error("登录按钮全部方式失败！")
 
-            time.sleep(5)
+            # 等待页面响应登录请求
+            logger.info("登录按钮已点击，等待8秒观察页面变化...")
+            time.sleep(8)
 
             # 判断登录结果
-            self.take_screenshot(page, f"login_{reg_no}")
+            self.take_screenshot(page, f"after_login_click_{reg_no}")
+            logger.info(f"已保存登录后截图: after_login_click_{reg_no}")
 
             # 检查是否进入年报页面（URL变化或页面内容变化）
             page_text = page.inner_text("body")
+            current_url = page.url
+            logger.info(f"登录后URL: {current_url}")
+            logger.info(f"登录后页面前200字: {page_text[:200]}")
+
             if "年报" in page_text or "企业基本信息" in page_text or "填报" in page_text:
                 logger.info(f"登录成功: {reg_no}")
                 return True

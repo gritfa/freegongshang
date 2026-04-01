@@ -1591,8 +1591,174 @@ class AnnualReportBot:
                         continue
 
                 if year_selected:
-                    logger.info("已选择年度报告并确认，等待进入填报页面...")
-                    time.sleep(5)
+                    logger.info("已选择年度报告并确认，等待弹窗...")
+                    time.sleep(3)
+
+                    # ---- 步骤4: 处理"多报合一"改革告知弹窗 ----
+                    logger.info("步骤4: 处理'多报合一'改革告知弹窗")
+                    self.take_screenshot(page, f"before_duobao_popup_{reg_no}")
+                    reform_notice_handled = False
+                    try:
+                        for frame in page.frames:
+                            try:
+                                result = frame.evaluate('''() => {
+                                    // 查找"已阅读并同意"按钮
+                                    let btns = document.querySelectorAll('button, input[type="button"], a');
+                                    for (let btn of btns) {
+                                        let text = btn.textContent || btn.value || '';
+                                        if (text.includes('已阅读') && text.includes('同意')) {
+                                            btn.click();
+                                            return {clicked: true, text: text.trim()};
+                                        }
+                                    }
+                                    return {clicked: false};
+                                }''')
+                                if result.get('clicked'):
+                                    logger.info(f"已点击'已阅读并同意'按钮: {result}")
+                                    reform_notice_handled = True
+                                    break
+                            except Exception:
+                                continue
+
+                        if not reform_notice_handled:
+                            # 备用: 用Playwright文字匹配
+                            for frame in page.frames:
+                                try:
+                                    btn = frame.locator('text=已阅读并同意')
+                                    if btn.count() > 0:
+                                        btn.first.click(timeout=5000)
+                                        logger.info("已点击'已阅读并同意'按钮(Playwright文字匹配)")
+                                        reform_notice_handled = True
+                                        break
+                                except Exception:
+                                    continue
+
+                        if reform_notice_handled:
+                            logger.info("'多报合一'改革告知已确认")
+                            time.sleep(3)
+                        else:
+                            logger.warning("未找到'已阅读并同意'按钮，可能弹窗未出现")
+                    except Exception as e:
+                        logger.warning(f"处理'多报合一'告知弹窗异常: {e}")
+
+                    self.take_screenshot(page, f"after_duobao_popup_{reg_no}")
+
+                    # ---- 步骤5: 处理"填写须知"弹窗 ----
+                    logger.info("步骤5: 处理'填写须知'弹窗")
+                    time.sleep(2)
+                    self.take_screenshot(page, f"before_notice_popup_{reg_no}")
+                    notice_handled = False
+                    try:
+                        for frame in page.frames:
+                            try:
+                                result = frame.evaluate('''() => {
+                                    // 先找到弹窗内的滚动容器并滚动到底部
+                                    let scrollables = document.querySelectorAll('div[style*="overflow"], .layui-layer-content, div[class*="scroll"], div[class*="content"]');
+                                    for (let el of scrollables) {
+                                        if (el.scrollHeight > el.clientHeight) {
+                                            el.scrollTop = el.scrollHeight;
+                                        }
+                                    }
+                                    // 也尝试滚动window
+                                    window.scrollTo(0, document.body.scrollHeight);
+                                    return {scrolled: true};
+                                }''')
+                                logger.info(f"已滚动到底部: {result}")
+                            except Exception:
+                                continue
+
+                        time.sleep(1)
+
+                        # 勾选"已阅"checkbox
+                        yiyue_checked = False
+                        for frame in page.frames:
+                            try:
+                                result = frame.evaluate('''() => {
+                                    // 查找包含"已阅"文字附近的checkbox
+                                    let checkboxes = document.querySelectorAll('input[type="checkbox"]');
+                                    for (let cb of checkboxes) {
+                                        // 检查checkbox附近的文字
+                                        let parent = cb.parentElement;
+                                        let text = parent ? parent.textContent : '';
+                                        if (text.includes('已阅') || cb.id.includes('yiyue') || cb.name.includes('yiyue')) {
+                                            if (!cb.checked) {
+                                                cb.click();
+                                            }
+                                            return {checked: true, id: cb.id, name: cb.name, text: text.trim().substring(0, 30)};
+                                        }
+                                    }
+                                    // 备用：查找label包含"已阅"的
+                                    let labels = document.querySelectorAll('label');
+                                    for (let label of labels) {
+                                        if (label.textContent.includes('已阅')) {
+                                            let forId = label.getAttribute('for');
+                                            if (forId) {
+                                                let cb = document.getElementById(forId);
+                                                if (cb && !cb.checked) cb.click();
+                                                return {checked: true, id: forId};
+                                            }
+                                            // 点击label本身
+                                            label.click();
+                                            return {checked: true, text: label.textContent.trim().substring(0, 30)};
+                                        }
+                                    }
+                                    return {checked: false};
+                                }''')
+                                if result.get('checked'):
+                                    logger.info(f"已勾选'已阅'checkbox: {result}")
+                                    yiyue_checked = True
+                                    break
+                            except Exception:
+                                continue
+
+                        if not yiyue_checked:
+                            # 备用: Playwright文字匹配点击
+                            for frame in page.frames:
+                                try:
+                                    cb = frame.locator('text=已阅')
+                                    if cb.count() > 0:
+                                        cb.first.click(timeout=5000)
+                                        logger.info("已点击'已阅'(Playwright文字匹配)")
+                                        yiyue_checked = True
+                                        break
+                                except Exception:
+                                    continue
+
+                        time.sleep(1)
+
+                        # 点击"确定"按钮
+                        for frame in page.frames:
+                            try:
+                                result = frame.evaluate('''() => {
+                                    let btns = document.querySelectorAll('button, input[type="button"], a');
+                                    for (let btn of btns) {
+                                        let text = btn.textContent || btn.value || '';
+                                        if (text.trim() === '确定' || text.trim() === '确认') {
+                                            // 确保是可见的按钮
+                                            let rect = btn.getBoundingClientRect();
+                                            if (rect.width > 0 && rect.height > 0) {
+                                                btn.click();
+                                                return {clicked: true, text: text.trim()};
+                                            }
+                                        }
+                                    }
+                                    return {clicked: false};
+                                }''')
+                                if result.get('clicked'):
+                                    logger.info(f"已点击填写须知确定按钮: {result}")
+                                    notice_handled = True
+                                    break
+                            except Exception:
+                                continue
+
+                        if notice_handled:
+                            logger.info("填写须知已确认，等待进入填报页面...")
+                            time.sleep(5)
+                        else:
+                            logger.warning("未找到填写须知确定按钮")
+                    except Exception as e:
+                        logger.warning(f"处理填写须知弹窗异常: {e}")
+
                     self.take_screenshot(page, f"enter_fill_page_{reg_no}")
                 else:
                     logger.warning("年度报告选择可能未成功")

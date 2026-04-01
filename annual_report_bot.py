@@ -1296,7 +1296,7 @@ class AnnualReportBot:
                 }}''')
                 logger.info("登录页短信验证码JS填入完成")
 
-            # 点击登录按钮 — <a id="liaisonsLoginBtn" href="javascript:logindz()">
+            # 点击登录按钮 — <a id="LiaisonsLoginBtn" href="javascript:logindz()">
             logger.info("登录页: 点击登录按钮")
 
             # 先截图，看点击前的页面状态
@@ -1309,9 +1309,9 @@ class AnnualReportBot:
             if hqyzm_frame:
                 try:
                     result = hqyzm_frame.evaluate('''() => {
-                        var el = document.getElementById("liaisonsLoginBtn");
+                        var el = document.getElementById("LiaisonsLoginBtn");
                         if (el) { el.click(); return "clicked_by_id"; }
-                        el = document.getElementsByName("liaisonsLoginBtn")[0];
+                        el = document.getElementsByName("LiaisonsLoginBtn")[0];
                         if (el) { el.click(); return "clicked_by_name"; }
                         return "not_found";
                     }''')
@@ -1321,12 +1321,12 @@ class AnnualReportBot:
                 except Exception as e:
                     logger.warning(f"登录按钮方式1(hqyzm_frame)失败: {e}")
 
-            # 方式2：遍历所有frame找到liaisonsLoginBtn并点击
+            # 方式2：遍历所有frame找到LiaisonsLoginBtn并点击
             if not login_clicked:
                 for frame in page.frames:
                     try:
                         result = frame.evaluate('''() => {
-                            var el = document.getElementById("liaisonsLoginBtn");
+                            var el = document.getElementById("LiaisonsLoginBtn");
                             if (!el) return "not_found";
                             var rect = el.getBoundingClientRect();
                             if (rect.width === 0 && rect.height === 0) return "hidden";
@@ -1344,7 +1344,7 @@ class AnnualReportBot:
             if not login_clicked:
                 for frame in page.frames:
                     try:
-                        locator = frame.locator('#liaisonsLoginBtn')
+                        locator = frame.locator('#LiaisonsLoginBtn')
                         if locator.count() > 0:
                             locator.click(timeout=5000)
                             login_clicked = True

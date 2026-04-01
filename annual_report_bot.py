@@ -1889,6 +1889,9 @@ class AnnualReportBot:
                             p.close()
                         except Exception:
                             pass
+                    # 清除cookies，避免旧session影响新登录页的验证码校验
+                    context.clear_cookies()
+                    logger.info("已清除浏览器cookies")
                     # 创建全新的页面
                     page = context.new_page()
                     page.goto(config.LOGIN_URL, wait_until="domcontentloaded")

@@ -1079,6 +1079,175 @@ class AnnualReportBot:
                 logger.error("所有获取验证码方法都失败了！请检查按钮诊断日志")
             time.sleep(2)
 
+            # 处理二次验证弹窗（点击获取验证码后可能弹出图片验证码确认框）
+            logger.info("登录页: 检查是否有二次验证弹窗")
+            popup_handled = False
+            for popup_attempt in range(3):
+                try:
+                    # 在所有frame中查找弹窗里的验证码图片
+                    for frame in page.frames:
+                        try:
+                            # 检测弹窗是否存在（提示框/layer弹窗）
+                            has_popup = frame.evaluate('''() => {
+                                // 查找layer弹窗或提示框
+                                var layerContent = document.querySelector('.layui-layer-content');
+                                if (layerContent && layerContent.offsetParent !== null) return true;
+                                // 查找包含"图片验证码"文字的弹窗
+                                var all = document.querySelectorAll('*');
+                                for (var i = 0; i < all.length; i++) {
+                                    if (all[i].textContent && all[i].textContent.includes('图片验证码') && all[i].offsetParent !== null) {
+                                        // 确保是弹窗里的，不是表单里的
+                                        var parent = all[i].closest('.layui-layer, .layer, [class*="popup"], [class*="dialog"], [class*="modal"]');
+                                        if (parent) return true;
+                                    }
+                                }
+                                return false;
+                            }''')
+                            if not has_popup:
+                                continue
+
+                            logger.info(f"登录页: 发现二次验证弹窗(frame: {frame.url[:60]})")
+
+                            # 截图弹窗里的验证码图片
+                            popup_code = None
+                            try:
+                                # 查找弹窗里的验证码图片（通常在layer弹窗内）
+                                popup_img = frame.evaluate('''() => {
+                                    // 查找layer弹窗内的img
+                                    var layers = document.querySelectorAll('.layui-layer-content, .layui-layer');
+                                    for (var i = 0; i < layers.length; i++) {
+                                        var imgs = layers[i].querySelectorAll('img');
+                                        for (var j = 0; j < imgs.length; j++) {
+                                            if (imgs[j].src && imgs[j].width > 30 && imgs[j].height > 10) {
+                                                return {
+                                                    src: imgs[j].src,
+                                                    id: imgs[j].id,
+                                                    selector: imgs[j].id ? '#' + imgs[j].id : null
+                                                };
+                                            }
+                                        }
+                                    }
+                                    return null;
+                                }''')
+                                logger.info(f"登录页: 弹窗验证码图片信息: {popup_img}")
+
+                                if popup_img:
+                                    # 用Playwright截图识别
+                                    img_selector = popup_img.get('selector') or f'img[src*="{popup_img["src"][-20:]}"]'
+                                    try:
+                                        img_el = frame.locator(f'.layui-layer-content img, .layui-layer img').first
+                                        img_bytes = img_el.screenshot(timeout=5000)
+                                        popup_code = self.captcha.solve_from_bytes(img_bytes)
+                                        logger.info(f"登录页: 弹窗验证码识别结果: {popup_code}")
+                                    except Exception as ss_err:
+                                        logger.warning(f"弹窗验证码截图失败: {ss_err}")
+                                        # 备选：用canvas方式
+                                        try:
+                                            b64 = frame.evaluate('''() => {
+                                                var layers = document.querySelectorAll('.layui-layer-content, .layui-layer');
+                                                for (var i = 0; i < layers.length; i++) {
+                                                    var imgs = layers[i].querySelectorAll('img');
+                                                    for (var j = 0; j < imgs.length; j++) {
+                                                        if (imgs[j].src && imgs[j].width > 30) {
+                                                            var canvas = document.createElement("canvas");
+                                                            canvas.width = imgs[j].naturalWidth || imgs[j].width;
+                                                            canvas.height = imgs[j].naturalHeight || imgs[j].height;
+                                                            var ctx = canvas.getContext("2d");
+                                                            ctx.drawImage(imgs[j], 0, 0);
+                                                            return canvas.toDataURL("image/png").split(",")[1];
+                                                        }
+                                                    }
+                                                }
+                                                return null;
+                                            }''')
+                                            if b64:
+                                                import base64
+                                                raw = base64.b64decode(b64)
+                                                popup_code = self.captcha.solve_from_bytes(raw)
+                                                logger.info(f"登录页: 弹窗验证码canvas识别: {popup_code}")
+                                        except Exception as canvas_err:
+                                            logger.warning(f"弹窗验证码canvas也失败: {canvas_err}")
+                            except Exception as img_err:
+                                logger.warning(f"弹窗验证码图片获取失败: {img_err}")
+
+                            if not popup_code or len(popup_code) < 3:
+                                logger.warning(f"弹窗验证码识别异常: {popup_code}，刷新重试")
+                                # 点击弹窗里的验证码图片刷新
+                                try:
+                                    frame.evaluate('''() => {
+                                        var layers = document.querySelectorAll('.layui-layer-content, .layui-layer');
+                                        for (var i = 0; i < layers.length; i++) {
+                                            var imgs = layers[i].querySelectorAll('img');
+                                            for (var j = 0; j < imgs.length; j++) {
+                                                if (imgs[j].src && imgs[j].width > 30) { imgs[j].click(); break; }
+                                            }
+                                        }
+                                    }''')
+                                except Exception:
+                                    pass
+                                time.sleep(1)
+                                continue
+
+                            # 填入弹窗验证码输入框
+                            fill_ok = frame.evaluate(f'''() => {{
+                                // 查找layer弹窗内的input
+                                var layers = document.querySelectorAll('.layui-layer-content, .layui-layer');
+                                for (var i = 0; i < layers.length; i++) {{
+                                    var inputs = layers[i].querySelectorAll('input[type="text"], input:not([type])');
+                                    for (var j = 0; j < inputs.length; j++) {{
+                                        inputs[j].value = "{popup_code}";
+                                        inputs[j].dispatchEvent(new Event('input', {{bubbles: true}}));
+                                        inputs[j].dispatchEvent(new Event('change', {{bubbles: true}}));
+                                        return true;
+                                    }}
+                                }}
+                                return false;
+                            }}''')
+                            logger.info(f"登录页: 弹窗验证码填入结果: {fill_ok}")
+
+                            if fill_ok:
+                                time.sleep(0.5)
+                                # 点击确定按钮
+                                confirm_ok = frame.evaluate('''() => {
+                                    // 查找layer弹窗的确定按钮
+                                    var btns = document.querySelectorAll('.layui-layer-btn a, .layui-layer-btn0, .layui-layer button, .layui-layer a');
+                                    for (var i = 0; i < btns.length; i++) {
+                                        var text = (btns[i].textContent || '').trim();
+                                        if (text === '确定' || text === '确认' || text === 'OK') {
+                                            btns[i].click();
+                                            return text;
+                                        }
+                                    }
+                                    // 备选：查找所有按钮
+                                    var allBtns = document.querySelectorAll('a, button, input[type="button"]');
+                                    for (var i = 0; i < allBtns.length; i++) {
+                                        var text = (allBtns[i].textContent || allBtns[i].value || '').trim();
+                                        if (text === '确定' || text === '确认') {
+                                            allBtns[i].click();
+                                            return text;
+                                        }
+                                    }
+                                    return false;
+                                }''')
+                                logger.info(f"登录页: 弹窗确定按钮点击: {confirm_ok}")
+                                if confirm_ok:
+                                    popup_handled = True
+                                    time.sleep(2)
+                                    break
+                        except Exception as frame_err:
+                            continue
+
+                    if popup_handled:
+                        break
+
+                    # 没找到弹窗，可能不需要二次验证
+                    if popup_attempt == 0:
+                        logger.info("登录页: 未检测到二次验证弹窗，可能不需要")
+                        break
+                except Exception as popup_err:
+                    logger.warning(f"处理二次验证弹窗失败(第{popup_attempt+1}次): {popup_err}")
+                    time.sleep(1)
+
             # 等待短信验证码
             sms_code = self.sms.wait_for_sms_code(
                 phone,

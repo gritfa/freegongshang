@@ -773,39 +773,6 @@ class AnnualReportBot:
                     logger.warning("未找到弹窗或已关闭")
                 time.sleep(0.5)
 
-            # 关闭操作指引开关（蓝色弹窗关闭后立即执行）
-            try:
-                # 先在主页面尝试
-                czybtn_found = page.evaluate('() => !!document.getElementById("czybtn")')
-                if czybtn_found:
-                    is_checked = page.evaluate('document.getElementById("czybtn").checked')
-                    if is_checked:
-                        page.evaluate('document.getElementById("czybtn").click()')
-                        logger.info("操作指引已关闭（主页面）")
-                        time.sleep(1)
-                    else:
-                        logger.info("操作指引已经是关闭状态")
-                else:
-                    # 主页面没找到，在iframe里找
-                    for frame in page.frames:
-                        try:
-                            found = frame.evaluate('() => !!document.getElementById("czybtn")')
-                            if found:
-                                is_checked = frame.evaluate('document.getElementById("czybtn").checked')
-                                if is_checked:
-                                    frame.evaluate('document.getElementById("czybtn").click()')
-                                    logger.info("操作指引已关闭（iframe）")
-                                    time.sleep(1)
-                                else:
-                                    logger.info("操作指引已经是关闭状态（iframe）")
-                                break
-                        except Exception:
-                            continue
-                    else:
-                        logger.info("未找到操作指引开关，跳过")
-            except Exception as e:
-                logger.warning(f"关闭操作指引失败: {e}，继续执行")
-
             # 关闭 layui-layer 弹窗（如果存在）
             try:
                 page.evaluate('''() => {
@@ -828,6 +795,56 @@ class AnnualReportBot:
                 time.sleep(2)
             except Exception as e:
                 logger.warning(f"点击联络员登录标签失败({e})，可能已在该标签页")
+
+            # 关闭操作指引开关（联络员登录标签点击后执行）
+            try:
+                time.sleep(1)
+                # 方法1: Playwright locator点击
+                czybtn = page.locator('input#czybtn')
+                if czybtn.count() > 0:
+                    if czybtn.is_checked():
+                        czybtn.click()
+                        logger.info("操作指引已关闭（Playwright locator）")
+                        time.sleep(1)
+                    else:
+                        logger.info("操作指引已经是关闭状态")
+                else:
+                    # 方法2: 在所有frame中查找
+                    closed = False
+                    for frame in page.frames:
+                        try:
+                            found = frame.evaluate('() => !!document.getElementById("czybtn")')
+                            if found:
+                                is_checked = frame.evaluate('document.getElementById("czybtn").checked')
+                                if is_checked:
+                                    frame.evaluate('document.getElementById("czybtn").click()')
+                                    logger.info("操作指引已关闭（iframe）")
+                                    time.sleep(1)
+                                else:
+                                    logger.info("操作指引已经是关闭状态（iframe）")
+                                closed = True
+                                break
+                        except Exception:
+                            continue
+                    if not closed:
+                        # 方法3: 用文本匹配找操作指引开关
+                        try:
+                            page.evaluate('''() => {
+                                var inputs = document.querySelectorAll('input[type="checkbox"]');
+                                for(var i=0; i<inputs.length; i++) {
+                                    var el = inputs[i];
+                                    var parent = el.parentElement;
+                                    if(parent && parent.textContent && parent.textContent.includes("操作指引")) {
+                                        if(el.checked) el.click();
+                                    }
+                                }
+                            }''')
+                            logger.info("操作指引: 用文本匹配方式尝试关闭")
+                        except Exception:
+                            pass
+                        logger.info("未通过id找到操作指引开关，已用文本匹配尝试")
+            except Exception as e:
+                logger.warning(f"关闭操作指引失败: {e}，继续执行")
 
             # 勾选协议复选框
             try:
@@ -945,16 +962,58 @@ class AnnualReportBot:
 
             # 点击获取短信验证码 — 按钮onclick是hyzm()，name="butn"
             logger.info("登录页: 点击获取验证码")
+            sms_btn_clicked = False
+
+            # 方法1: 在captcha_page调用hyzm()
             try:
                 captcha_page.evaluate('hyzm()')
-                logger.info("登录页获取验证码: JS hyzm() 调用成功")
+                logger.info("登录页获取验证码: JS hyzm() 调用成功(captcha_page)")
+                sms_btn_clicked = True
             except Exception as e1:
-                logger.warning(f"登录页JS hyzm() 失败: {e1}，尝试点击按钮")
+                logger.warning(f"captcha_page hyzm() 失败: {e1}")
+
+            # 方法2: 在主页面page调用hyzm()
+            if not sms_btn_clicked and captcha_page != page:
+                try:
+                    page.evaluate('hyzm()')
+                    logger.info("登录页获取验证码: JS hyzm() 调用成功(page)")
+                    sms_btn_clicked = True
+                except Exception as e2:
+                    logger.warning(f"page hyzm() 失败: {e2}")
+
+            # 方法3: 在所有frame中尝试hyzm()
+            if not sms_btn_clicked:
+                for frame in page.frames:
+                    try:
+                        frame.evaluate('hyzm()')
+                        logger.info(f"登录页获取验证码: JS hyzm() 调用成功(frame: {frame.url})")
+                        sms_btn_clicked = True
+                        break
+                    except Exception:
+                        continue
+
+            # 方法4: 用Playwright直接点击按钮元素
+            if not sms_btn_clicked:
+                try:
+                    btn = captcha_page.locator('a[name="butn"]')
+                    if btn.count() > 0:
+                        btn.click()
+                        logger.info("登录页获取验证码: Playwright click a[name=butn] 成功")
+                        sms_btn_clicked = True
+                except Exception as e3:
+                    logger.warning(f"Playwright click butn 失败: {e3}")
+
+            # 方法5: getElementsByName
+            if not sms_btn_clicked:
                 try:
                     captcha_page.evaluate('document.getElementsByName("butn")[0].click()')
                     logger.info("登录页获取验证码: JS click butn 成功")
-                except Exception as e2:
-                    logger.error(f"登录页获取验证码按钮全部失败: {e2}")
+                    sms_btn_clicked = True
+                except Exception as e4:
+                    logger.error(f"登录页获取验证码按钮全部失败: {e4}")
+
+            if not sms_btn_clicked:
+                logger.error("所有获取验证码方法都失败了！")
             time.sleep(2)
 
             # 等待短信验证码

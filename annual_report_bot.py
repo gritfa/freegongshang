@@ -1024,8 +1024,10 @@ class AnnualReportBot:
                 }''')
                 if result.get('success'):
                     logger.info(f"方法1成功: captcha_page JS .click() on butn, text={result.get('text')}, onclick={result.get('onclick')}")
-                    if result.get('text'):
+                    if result.get('text') or 'hqyzm' in (result.get('onclick') or ''):
                         sms_btn_clicked = True
+                        if not result.get('text'):
+                            logger.info("方法1: 按钮文字为空但onclick包含hqyzm，信任此次点击")
                     else:
                         logger.warning("方法1: 按钮文字为空，可能点到了错误元素，继续尝试其他方法")
                 else:
